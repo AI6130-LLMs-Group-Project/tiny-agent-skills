@@ -1,38 +1,3 @@
-# Environment Setup
-
-This project uses `uv` with Python 3.12.
-
-```bash
-uv sync
-uv run python -m agent hello
-```
-
-## Install llama.cpp
-
-```bash
-mkdir -p runtime && cd runtime
-git clone https://github.com/ggerganov/llama.cpp.git llama-cpp
-cd llama-cpp
-mkdir -p build && cd build
-cmake .. -DLLAMA_BUILD_SERVER=ON
-cmake --build . --target llama-server --config Release
-cd ../../..
-```
-
-## Quickstart (Qwen3-VL server)
-
-Install `llama.cpp` first, then download the model, then start the server:
-
-```bash
-1)  mkdir -p runtime/model
-
-# 2) download Qwen3-VL-2B model + mmproj
-bash script/download_qwen3vl.sh
-
-# 3) run the server
-bash script/run_qwen3vl_server.sh
-```
-
 # Tiny  Skills
 
 ## Project Proposal
