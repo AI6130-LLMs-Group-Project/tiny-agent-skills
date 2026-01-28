@@ -5,8 +5,12 @@
 
 set -e
 
+# Resolve repo root from this script location, regardless of where it's run.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
 # Configuration
-MODEL_DIR="../runtime/models/Qwen3vl-2B"
+MODEL_DIR="${REPO_ROOT}/runtime/models/Qwen3vl-2B"
 HF_REPO="Qwen/Qwen3-VL-2B-Instruct-GGUF"
 BASE_URL="https://huggingface.co/${HF_REPO}/resolve/main"
 

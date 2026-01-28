@@ -15,7 +15,7 @@ git clone https://github.com/ggerganov/llama.cpp.git llama-cpp
 cd llama-cpp
 mkdir -p build && cd build
 cmake .. -DLLAMA_BUILD_SERVER=ON
-cmake --build . --target llama-server --config Release
+cmake --build . --target llama-server --config Release -j2
 cd ../../..
 ```
 
@@ -24,12 +24,13 @@ cd ../../..
 Install `llama.cpp` first, then download the model, then start the server:
 
 ```bash
-1)  mkdir -p runtime/model
+# 1  create directories for models
+mkdir -p runtime/models
 
-# 2) download Qwen3-VL-2B model + mmproj
+# 2 download Qwen3-VL-2B model + mmproj
 bash script/download_qwen3vl.sh
 
-# 3) run the server
+# 3 run the server
 bash script/run_qwen3vl_server.sh
 ```
 
