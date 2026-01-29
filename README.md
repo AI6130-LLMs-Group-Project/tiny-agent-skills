@@ -1,5 +1,6 @@
 # Environment Setup
 
+## Install Dependencies
 This project uses `uv` with Python 3.12.
 
 ```bash
@@ -9,6 +10,7 @@ uv run python -m agent hello
 
 ## Install llama.cpp
 
+### MacOS / Linux / WSL
 ```bash
 mkdir -p runtime && cd runtime
 git clone https://github.com/ggerganov/llama.cpp.git llama-cpp
@@ -19,9 +21,7 @@ cmake --build . --target llama-server --config Release -j2
 cd ../../..
 ```
 
-### Windows (I made the process one-click)
-
-Use the provided batch file to clone and build a static `llama-server.exe`:
+### Windows
 
 ```bat
 script\setup_llama_cpp.bat
