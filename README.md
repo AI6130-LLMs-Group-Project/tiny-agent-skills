@@ -59,11 +59,11 @@ script\run_qwen3vl_server.bat
 
 ## Project Proposal
 
-**Version:** 2.0.1
+**Version:** 2.0.1  
 **Date:** January 28, 2026  
-**Author:** Yifan Xu
+**Author:** Yifan Xu  
 **Last Update:** January 29, 2026  
-**Updated by:** Hanny Zhang
+**Updated by:** Hanny Zhang 
 
 ---
 
