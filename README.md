@@ -19,6 +19,14 @@ cmake --build . --target llama-server --config Release -j2
 cd ../../..
 ```
 
+### Windows (I made the process one-click)
+
+Use the provided batch file to clone and build a static `llama-server.exe`:
+
+```bat
+script\setup_llama_cpp.bat
+```
+
 ## Quickstart (Qwen3-VL server)
 
 Install `llama.cpp` first, then download the model, then start the server:
@@ -34,13 +42,28 @@ bash script/download_qwen3vl.sh
 bash script/run_qwen3vl_server.sh
 ```
 
+### Windows
+
+```bat
+REM 1 build llama.cpp (if not done yet)
+script\setup_llama_cpp.bat
+
+REM 2 download Qwen3-VL-2B model + mmproj
+script\download_qwen3vl.bat
+
+REM 3 run the server
+script\run_qwen3vl_server.bat
+```
+
 # Tiny  Skills
 
 ## Project Proposal
 
-**Version:** 2.0  
+**Version:** 2.0.1
 **Date:** January 28, 2026  
 **Author:** Yifan Xu
+**Last Update:** January 29, 2026  
+**Updated by:** Hanny Zhang
 
 ---
 
