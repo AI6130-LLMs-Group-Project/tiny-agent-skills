@@ -29,6 +29,8 @@ script\setup_llama_cpp.bat
 
 ## Quickstart (Qwen3-VL server)
 
+### MacOS / Linux / WSL
+
 Install `llama.cpp` first, then download the model, then start the server:
 
 ```bash
@@ -43,6 +45,8 @@ bash script/run_qwen3vl_server.sh
 ```
 
 ### Windows
+
+Double click the following .bat files to init. If you wanted Vulkan, please install it first from [Vulkan SDK](https://vulkan.lunarg.com/doc/sdk/1.4.335.0/windows/getting_started.html).
 
 ```bat
 REM 1 build llama.cpp (if not done yet)
