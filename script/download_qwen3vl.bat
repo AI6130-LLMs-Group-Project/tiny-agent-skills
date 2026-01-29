@@ -1,7 +1,7 @@
 @echo off
 setlocal enabledelayedexpansion
 
-rem Script to download Qwen3-VL-2B-Instruct-GGUF and its mmproj (Windows)
+rem Script for Windows OS to download Qwen3-VL-2B-Instruct-GGUF and its mmproj
 rem Files are downloaded from Hugging Face: Qwen/Qwen3-VL-2B-Instruct-GGUF
 
 set SCRIPT_DIR=%~dp0
@@ -17,7 +17,7 @@ set MMPROJ_FILE=mmproj-Qwen3VL-2B-Instruct-F16.gguf
 if not exist "%MODEL_DIR%" mkdir "%MODEL_DIR%"
 
 echo Downloading Qwen3-VL-2B-Instruct-GGUF files to %MODEL_DIR%
-echo ==============================================
+echo =======================================================
 
 if exist "%MODEL_DIR%\%MODEL_FILE%" (
   echo Model file already exists: %MODEL_FILE%
