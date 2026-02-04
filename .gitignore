@@ -215,3 +215,10 @@ runtime/llama-cpp/
 .claude/
 .cache/
 *.log
+
+# macOS
+.DS_Store
+
+# Large data files
+src/yifan/skill_demo/data/ps/FinQA/train.json
+src/yifan/skill_demo/data/react/vitaminc/train.jsonl
