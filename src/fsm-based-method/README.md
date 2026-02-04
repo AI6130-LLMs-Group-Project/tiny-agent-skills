@@ -47,7 +47,7 @@ Run batch evaluation (prints steps/system answer/gold answer/cumulative accuracy
 
 ```bash
 cd src/fsm-based-method
-python fever_runner.py --data data/paper_dev.jsonl --limit 100 -random --seed 234 --show-trace
+python fever_runner.py --data data/paper_dev.jsonl --limit 100 --random --seed 234 --show-trace
 ```
 
 Useful args:

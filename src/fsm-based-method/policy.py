@@ -39,9 +39,13 @@ TOOL_SCOPE = {
         "sentence_extract",
     ],
     "SELECT_EVIDENCE": [],
-    "NLI_VERIFY": [],
+    "NLI_VERIFY": [
+        "nli_score",
+    ],
     "DECIDE": [],
-    "OUTPUT": [],
+    "OUTPUT": [
+        "response_compose",
+    ],
 }
 
 

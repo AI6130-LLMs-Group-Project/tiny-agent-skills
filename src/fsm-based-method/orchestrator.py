@@ -181,6 +181,8 @@ class Orchestrator:
             text = r.get("snippet") or r.get("title") or ""
             if not text:
                 continue
+            text = re.sub(r"<[^>]+>", " ", str(text))
+            text = " ".join(text.split())
             eid = f"{r.get('src','web')}:{r.get('rid','')}"
             items.append(
                 EvidenceItem(
@@ -362,7 +364,12 @@ class Orchestrator:
                     self._set_default_verdicts()
                     self.state.tick("OUTPUT")
                     continue
-                out = self._call_skill("evidence_stance_scorer", {"claims": self.state.claims, "sel": sel_in, "st": {"sid": self.state.sid, "rev": self.state.rev, "fsm": self.state.fsm}})
+                out = self._run_tool_with_retry(
+                    "nli_score",
+                    {"claims": self.state.claims, "sel": sel_in, "st": {"sid": self.state.sid, "rev": self.state.rev, "fsm": self.state.fsm}},
+                )
+                if out.get("s") != "ok":
+                    out = self._call_skill("evidence_stance_scorer", {"claims": self.state.claims, "sel": sel_in, "st": {"sid": self.state.sid, "rev": self.state.rev, "fsm": self.state.fsm}})
                 self.state.add_history("evidence_stance_scorer", out["s"], out)
                 if out["s"] == "ok":
                     self.state.scores = out.get("d", {}).get("scores", [])
@@ -385,7 +392,12 @@ class Orchestrator:
             if self.state.fsm == "OUTPUT":
                 if not self.state.verdicts:
                     self._set_default_verdicts()
-                out = self._call_skill("response_composer", {"claims": self.state.claims, "ver": self.state.verdicts, "use": self.state.selected, "st": {"sid": self.state.sid, "rev": self.state.rev, "fsm": self.state.fsm}})
+                out = self._run_tool_with_retry(
+                    "response_compose",
+                    {"claims": self.state.claims, "ver": self.state.verdicts, "use": self.state.selected, "st": {"sid": self.state.sid, "rev": self.state.rev, "fsm": self.state.fsm}},
+                )
+                if out.get("s") != "ok":
+                    out = self._call_skill("response_composer", {"claims": self.state.claims, "ver": self.state.verdicts, "use": self.state.selected, "st": {"sid": self.state.sid, "rev": self.state.rev, "fsm": self.state.fsm}})
                 self.state.add_history("response_composer", out["s"], out)
                 if out["s"] == "ok":
                     self.state.output = out.get("d")

@@ -38,7 +38,7 @@ Compose a minimal, citation-ready response outline from verdicts and evidence id
 ```
 
 ## Allowed tools
-- none (no direct tool calls)
+- `tool.response_compose` (preferred deterministic path)
 
 ## Algorithm/logic steps
 1. For each claim, copy verdict and confidence.

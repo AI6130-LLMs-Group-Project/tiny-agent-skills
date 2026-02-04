@@ -94,6 +94,16 @@ TOOLS = {
         "module": "fsm-based-method.tools.tool_request_compose",
         "path": str(_TOOLS_DIR / "tool_request_compose.py"),
     },
+    "nli_score": {
+        "id": "nli_score",
+        "module": "fsm-based-method.tools.nli_score",
+        "path": str(_TOOLS_DIR / "nli_score.py"),
+    },
+    "response_compose": {
+        "id": "response_compose",
+        "module": "fsm-based-method.tools.response_compose",
+        "path": str(_TOOLS_DIR / "response_compose.py"),
+    },
 }
 
 

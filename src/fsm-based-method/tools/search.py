@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import time
 import urllib.parse
 import urllib.request
@@ -63,7 +64,9 @@ def _append_evidence(results):
 def _clean(text):
     if text is None:
         return ""
-    return " ".join(unescape(text).split())
+    text = unescape(text)
+    text = re.sub(r"<[^>]+>", " ", text)
+    return " ".join(text.split())
 
 
 def _wiki_search(q, lim):

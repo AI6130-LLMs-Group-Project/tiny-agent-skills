@@ -31,7 +31,7 @@ Score how each selected evidence sentence supports or refutes a claim.
 ```
 
 ## Allowed tools
-- none (no direct tool calls)
+- `tool.nli_score` (preferred deterministic path)
 
 ## Algorithm/logic steps
 1. Compare claim with evidence sentence for direct agreement or contradiction.
