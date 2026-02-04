@@ -55,6 +55,11 @@ class PipelineConfig:
     steps: list[StepDef]
     max_steps: int = 100
 
+    @property
+    def dag_str(self) -> str:
+        """DAG 的步骤顺序，用于打印/日志。"""
+        return " → ".join(s.skill_id for s in self.steps)
+
 
 # -----------------------------------------------------------------------------
 # Runner

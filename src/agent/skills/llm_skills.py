@@ -71,47 +71,27 @@ class _EvidenceExtractSkill:
         }
 
 
-# ----- verify：三分类 + 明确 few-shot，强调 Refute -----
+# ----- verify：单次调用，三分类；明确 Refute 与 NEI 的边界 -----
 VERIFY_SYSTEM = """You are a fact-checker. Reply with exactly one word: Support, Refute, or NEI.
 
-- Support: The evidence clearly backs the claim.
-- Refute: The evidence says the OPPOSITE of the claim or clearly contradicts it. You MUST say Refute when you see this.
-- NEI: No relevant evidence, or evidence does not clearly support or refute.
+Definitions:
+- Support: The evidence clearly states something that backs the claim.
+- Refute: The evidence is about the same fact as the claim but states the OPPOSITE or a conflicting fact (e.g. claim "X is Y", evidence says "X is not Y"). If the evidence clearly contradicts the claim, say Refute — do not treat contradicting evidence as "irrelevant" (NEI).
+- NEI: The evidence does not address the claim (different topic, or no real information). Use NEI when evidence is truly off-topic or silent on the claim, not when it contradicts.
 
-Important: Do not skip Refute. If the evidence contradicts the claim, your answer must be Refute."""
-
-VERIFY_FEWSHOT = """
-Example 1 - Support:
-Claim: The film Soul Food was released by Fox 2000 Pictures.
-Evidence: Fox 2000 Pictures released Soul Food in 1997.
-Answer: Support
-
-Example 2 - Refute (evidence contradicts claim):
-Claim: Telemundo is an English-language network.
-Evidence: Telemundo is a Spanish-language television network.
-Answer: Refute
-
-Example 3 - Refute (evidence contradicts claim):
-Claim: Sean Penn is only a stage actor.
-Evidence: Sean Penn is known for his film roles and won Academy Awards for movies.
-Answer: Refute
-
-Example 4 - NEI:
-Claim: Anne Rice was born in New Jersey.
-Evidence: (no relevant evidence)
-Answer: NEI
-"""
+Important: Evidence that contradicts the claim is still "relevant" — it speaks to the claim and says the opposite, so answer Refute. Only use NEI when the evidence does not speak to the claim at all (missing, different subject, or too vague to tell). When in doubt: if evidence and claim are about the same thing but conflict -> Refute; if evidence is about something else or says nothing about the claim -> NEI."""
 
 VERIFY_USER_TEMPLATE = """Claim: {claim}
 
 Evidence:
 {evidence}
-""" + VERIFY_FEWSHOT + """
-Now answer for the claim above. If the evidence contradicts the claim, say Refute. One word only: Support, Refute, or NEI?"""
+
+If the evidence is about the same fact as the claim but says the opposite, answer Refute (do not call it NEI). If the evidence does not address the claim at all, answer NEI.
+One word: Support, Refute, or NEI?"""
 
 
 class _VerifySkill:
-    """根据 claim + evidence 做 Support/Refute/NEI，调本地 LLM。"""
+    """根据 claim + evidence 一次输出 Support/Refute/NEI。"""
 
     def run(self, context: dict[str, Any]) -> dict[str, Any]:
         claim = context.get("claim", "")
@@ -122,13 +102,10 @@ class _VerifySkill:
             e.get("text", str(e))[:500] for e in evidence[:5]
         )
         base_url = _get_base_url()
-        user_content = VERIFY_USER_TEMPLATE.format(
-            claim=claim, evidence=evidence_text
-        )
         text = chat(
             [
                 {"role": "system", "content": VERIFY_SYSTEM},
-                {"role": "user", "content": user_content},
+                {"role": "user", "content": VERIFY_USER_TEMPLATE.format(claim=claim, evidence=evidence_text)},
             ],
             base_url=base_url,
         )

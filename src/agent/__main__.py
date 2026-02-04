@@ -36,6 +36,7 @@ def run_fact_check_example(root: Path) -> None:
     with config_path.open() as f:
         data = yaml.safe_load(f)
     config = load_pipeline_config_from_yaml(data)
+    print("Pipeline (DAG):", config.dag_str)
     runner = PipelineRunner(config=config, registry=fact_check_skill_registry())
     result = runner.run({"claim": "Newton was born in 1643."})
     print("Pipeline result:", result.get("output", result))
@@ -58,6 +59,7 @@ def run_pipeline_on_dataset(dataset_path: Path, limit: int | None = None) -> Non
     else:
         with config_path.open() as f:
             config = load_pipeline_config_from_yaml(yaml.safe_load(f))
+    print("Pipeline (DAG):", config.dag_str)
     runner = PipelineRunner(config=config, registry=fact_check_skill_registry())
 
     correct = 0
