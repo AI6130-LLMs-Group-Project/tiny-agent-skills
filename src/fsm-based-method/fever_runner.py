@@ -45,6 +45,21 @@ def _predict_label(claim: str) -> Tuple[str, AgentState]:
     return "NOT ENOUGH INFO", state
 
 
+def _extract_evidence(state: AgentState, limit: int = 3) -> str:
+    if not state.evidence:
+        return ""
+    selected_ids = {s.get("eid") for s in state.selected} if state.selected else set()
+    # Prefer selected evidence, fallback to any evidence.
+    ev_list = [e for e in state.evidence if e.eid in selected_ids] or list(state.evidence)
+    lines = []
+    for ev in ev_list[:limit]:
+        text = (ev.s or "").strip()
+        if not text:
+            continue
+        lines.append(f"- {text}")
+    return "\n".join(lines)
+
+
 # Main entry point: run on FEVER JSONL with given flags passing in args
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run FSM fact-verification pipeline on FEVER JSONL.")
@@ -96,6 +111,10 @@ def main() -> None:
         if args.show_trace:
             for h in state.history:
                 print(f"    - {h.state} :: {h.name} :: {h.status}")
+            ev_text = _extract_evidence(state)
+            if ev_text:
+                print("  evidence:")
+                print(ev_text)
         print("-" * 80)
 
     print(f"Done. evaluated={total}, correct={correct}, accuracy={correct/max(total,1):.4f}")
