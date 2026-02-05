@@ -106,6 +106,12 @@ def _entity_tokens(text):
             ents.add(_normalize_token(m))
     return ents
 
+def _predicate_terms(text):
+    ents = _entity_tokens(text)
+    toks = set(_content_tokens(text))
+    return {t for t in toks if t not in ents}
+
+
 
 def _has_opposite_pair(claim, sent):
     c = f" {_normalize_text(claim)} "
@@ -116,8 +122,55 @@ def _has_opposite_pair(claim, sent):
     return False
 
 
+def _only_refute(claim, sent):
+    c = _normalize_text(claim)
+    if " only " not in f" {c} " and " sole " not in f" {c} ":
+        return False
+    claim_ents = _entity_tokens(claim)
+    sent_ents = _entity_tokens(sent)
+    if not claim_ents or not sent_ents:
+        return False
+    extra = {e for e in sent_ents if e not in claim_ents}
+    if len(extra) >= 2 and any(e in sent_ents for e in claim_ents):
+        return True
+    return False
+
+
 def _normalize_text(text):
     return re.sub(r"\s+", " ", (text or "").lower()).strip()
+
+def _copular_claim(text):
+    t = _normalize_text(text).rstrip(".")
+    m = re.match(r"(.+?)\s+(is|was|are|were)\s+(an?|the)\s+(.+)$", t)
+    if not m:
+        return None
+    subj = m.group(1).strip()
+    pred = m.group(4).strip()
+    if not subj or not pred:
+        return None
+    return subj, pred
+
+
+def _evidence_matches_copular(subj, pred, sent):
+    if not subj or not pred or not sent:
+        return False
+    subj_terms = _content_tokens(subj)
+    pred_terms = _content_tokens(pred)
+    if not subj_terms or not pred_terms:
+        return False
+    sent_terms = set(_content_tokens(sent))
+    subj_need = 2 if len(subj_terms) >= 3 else 1
+    subj_hits = sum(1 for t in subj_terms if t in sent_terms)
+    pred_hits = sum(1 for t in pred_terms if t in sent_terms)
+    if subj_hits < subj_need or pred_hits < 1:
+        return False
+    s_norm = f" {_normalize_text(sent)} "
+    if any(f" {v} " in s_norm for v in ("is", "was", "are", "were")):
+        return True
+    if re.search(r",\s+(an?|the)\s+\w+", s_norm):
+        return True
+    return False
+
 
 def _load_runtime_env():
     if getattr(_load_runtime_env, "_loaded", False):
@@ -175,13 +228,26 @@ def _score_pair(claim, sent):
     if overlap < neutral_overlap or ratio < neutral_ratio:
         return "neutral", "low"
 
+    cop = _copular_claim(claim)
+    if cop:
+        subj, pred = cop
+        if not _evidence_matches_copular(subj, pred, sent):
+            return "neutral", "low"
+
     cy = _years(claim)
     sy = _years(sent)
+    if cy and not sy:
+        return "neutral", "low"
     if cy and sy and cy.isdisjoint(sy) and ratio >= year_refute_ratio:
-        return "refute", "high"
+        pred_terms = _predicate_terms(claim)
+        if pred_terms and pred_terms.intersection(s_toks):
+            return "refute", "high"
+        return "neutral", "low"
 
     cn = _numbers(claim)
     sn = _numbers(sent)
+    if cn and not sn:
+        return "neutral", "low"
     # If claim has numbers and sentence has numbers but they disagree, treat as contradiction.
     if cn and sn and cn.isdisjoint(sn) and ratio >= num_refute_ratio:
         return "refute", "med"
@@ -192,6 +258,8 @@ def _score_pair(claim, sent):
         return "refute", "high"
 
     if _has_opposite_pair(claim, sent) and ratio >= opp_refute_ratio:
+        return "refute", "high"
+    if _only_refute(claim, sent):
         return "refute", "high"
 
     # Quick substring match is a strong support signal.

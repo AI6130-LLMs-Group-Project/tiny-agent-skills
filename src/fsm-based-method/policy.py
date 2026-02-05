@@ -7,9 +7,7 @@ SKILL_SCOPE = {
         "claim_decomposer",
         "evidence_query_planner",
     ],
-    "RETRIEVAL": [
-        "tool_request_composer",
-    ],
+    "RETRIEVAL": [],
     "SELECT_EVIDENCE": [
         "evidence_filter",
     ],
@@ -32,7 +30,6 @@ TOOL_SCOPE = {
         "evidence_query_plan",
     ],
     "RETRIEVAL": [
-        "tool_request_compose",
         "search",
         "web_search",
         "kb_lookup",

@@ -17,6 +17,21 @@ _STOP = {
     "under", "than", "then", "who", "what", "when", "where", "which",
 }
 
+_AMBIGUOUS = {
+    "lost", "up", "it", "her", "him", "us", "them", "once", "home", "now", "then",
+    "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+    "go", "run", "love", "fall", "rise", "gone", "red", "blue", "black", "white", "green",
+}
+
+_FIXED_HINTS = [
+    "TV series", "film", "movie", "album", "song", "novel", "book", "band", "episode", "video game",
+    "company", "person",
+]
+
+_WIKI_HINTS = [
+    "TV series", "film", "album", "song", "novel", "book", "video game", "band",
+]
+
 
 def _tokens(text):
     toks = re.findall(r"[a-z0-9]+", (text or "").lower())
@@ -51,6 +66,31 @@ def _predicate_terms(text):
     return terms
 
 
+def _ordered_unique(seq):
+    seen = set()
+    out = []
+    for s in seq:
+        if s in seen:
+            continue
+        seen.add(s)
+        out.append(s)
+    return out
+
+
+def _numbers(text):
+    nums = re.findall(r"\b\d+(?:\.\d+)?\b", text or "")
+    return _ordered_unique(nums)
+
+
+def _is_ambiguous_entity(ent):
+    if not ent:
+        return False
+    if " " in ent:
+        return False
+    low = ent.lower()
+    return low in _AMBIGUOUS
+
+
 def _dedupe(seq):
     seen = set()
     out = []
@@ -62,11 +102,56 @@ def _dedupe(seq):
     return out
 
 
-def _limit_tokens(q, max_tokens=6):
+def _limit_tokens(q, max_tokens=8):
     parts = q.split()
     if len(parts) <= max_tokens:
         return q
-    return " ".join(parts[:max_tokens])
+    nums = [p for p in parts if re.fullmatch(r"\d+(?:\.\d+)?", p)]
+    non_nums = [p for p in parts if p not in nums]
+    kept = []
+    for p in non_nums:
+        if len(kept) >= max_tokens - len(nums):
+            break
+        kept.append(p)
+    out = kept + nums
+    return " ".join(out[:max_tokens])
+
+
+def _build_queries(claim_text):
+    ents = _entity_phrases(claim_text)
+    preds = _predicate_terms(claim_text)
+    nums = _numbers(claim_text)
+    queries = []
+
+    if ents:
+        ent = ents[0].strip()
+        if ent:
+            base = [ent] + preds[:2] + nums
+            queries.append(" ".join([t for t in base if t]).strip())
+            if preds:
+                queries.append(" ".join([t for t in [ent] + nums if t]).strip())
+    else:
+        toks = _tokens(claim_text)
+        if toks:
+            queries.append(" ".join(toks[:6]))
+
+    if ents and nums:
+        ent = ents[0].strip()
+        queries.append(" ".join([t for t in [ent] + nums if t]).strip())
+    if nums and not ents:
+        queries.append(" ".join(nums + preds[:2]).strip())
+
+    if ents:
+        ent = ents[0].strip()
+        if _is_ambiguous_entity(ent):
+            for hint in _FIXED_HINTS:
+                queries.append(" ".join([t for t in [ent, hint] + nums if t]).strip())
+            for hint in _WIKI_HINTS:
+                queries.append(" ".join([t for t in [f"{ent} ({hint})"] + nums if t]).strip())
+
+    queries = [_limit_tokens(q) for q in queries if q]
+    queries = _dedupe(queries)[:4]
+    return queries
 
 
 def run(args):
@@ -83,23 +168,7 @@ def run(args):
             continue
         cid = c.get("id", "s1")
         claim_text = c.get("c", "")
-        ents = _entity_phrases(claim_text)
-        preds = _predicate_terms(claim_text)
-        queries = []
-
-        if ents:
-            ent = ents[0].strip()
-            if ent:
-                queries.append(ent)
-                if preds:
-                    queries.append(" ".join([ent] + preds[:2]))
-        else:
-            toks = _tokens(claim_text)
-            if toks:
-                queries.append(" ".join(toks[:6]))
-
-        queries = [_limit_tokens(q) for q in queries if q]
-        queries = _dedupe(queries)[:2]
+        queries = _build_queries(claim_text)
         if not queries:
             continue
         plans.append({"id": cid, "q": queries, "src": ["wiki", "kb", "web"], "lim": 4})

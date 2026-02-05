@@ -21,9 +21,16 @@ DEFAULT_NEXT = {
 }
 
 
+BACK_NEXT = {
+    "SELECT_EVIDENCE": "RETRIEVAL",
+}
+
+
 def next_state(current: str, status: str) -> str:
     if status == "retry":
         return current
+    if status == "back":
+        return BACK_NEXT.get(current, current)
     if status == "error":
         return "OUTPUT"
     return DEFAULT_NEXT.get(current, "OUTPUT")

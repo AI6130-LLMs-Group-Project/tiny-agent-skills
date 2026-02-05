@@ -115,6 +115,15 @@ def run(args):
     if not sents:
         return _err("NO_SENTENCES", "no sentences found")
 
+    q_numbers = set(re.findall(r"\b\d+\b", query)) if query else set()
+    if q_numbers:
+        filtered = []
+        for s in sents:
+            if set(re.findall(r"\b\d+\b", s)).intersection(q_numbers):
+                filtered.append(s)
+        if filtered:
+            sents = filtered
+
     if query:
         q_terms = _tok(query)
         scores = _bm25_scores(sents, q_terms)

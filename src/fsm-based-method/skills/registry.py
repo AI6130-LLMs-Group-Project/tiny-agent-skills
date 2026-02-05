@@ -21,10 +21,6 @@ SKILLS = {
         "id": "evidence_query_planner",
         "path": str(_SKILLS_DIR / "evidence-query-planner.md"),
     },
-    "tool_request_composer": {
-        "id": "tool_request_composer",
-        "path": str(_SKILLS_DIR / "tool-request-composer.md"),
-    },
     "evidence_filter": {
         "id": "evidence_filter",
         "path": str(_SKILLS_DIR / "evidence-filter.md"),
@@ -40,10 +36,6 @@ SKILLS = {
     "response_composer": {
         "id": "response_composer",
         "path": str(_SKILLS_DIR / "response-composer.md"),
-    },
-    "fsm_transition_decider": {
-        "id": "fsm_transition_decider",
-        "path": str(_SKILLS_DIR / "fsm-transition-decider.md"),
     },
 }
 
@@ -74,11 +66,6 @@ TOOLS = {
         "module": "fsm-based-method.tools.kb_lookup",
         "path": str(_TOOLS_DIR / "kb_lookup.py"),
     },
-    "output_verify": {
-        "id": "output_verify",
-        "module": "fsm-based-method.tools.output_verify",
-        "path": str(_TOOLS_DIR / "output_verify.py"),
-    },
     "claim_normalize": {
         "id": "claim_normalize",
         "module": "fsm-based-method.tools.claim_normalize",
@@ -88,11 +75,6 @@ TOOLS = {
         "id": "claim_decompose",
         "module": "fsm-based-method.tools.claim_decompose",
         "path": str(_TOOLS_DIR / "claim_decompose.py"),
-    },
-    "tool_request_compose": {
-        "id": "tool_request_compose",
-        "module": "fsm-based-method.tools.tool_request_compose",
-        "path": str(_TOOLS_DIR / "tool_request_compose.py"),
     },
     "nli_score": {
         "id": "nli_score",

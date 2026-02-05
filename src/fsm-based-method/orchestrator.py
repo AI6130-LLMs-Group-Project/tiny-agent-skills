@@ -13,6 +13,7 @@ from guardrail import basic_check, check_tool_output, extract_evidence_rows, san
 from policy import allow_skill, allow_tool
 from skills import registry as skill_registry
 from state import AgentState, EvidenceItem, load_env
+from fsm import next_state as fsm_next_state
 
 
 ### LLM Client and Tool Executor =====================
@@ -192,12 +193,76 @@ class Orchestrator:
             last_err = msg
         return {"s": "error", "d": None, "e": {"code": "BAD_TOOL_OUTPUT", "msg": last_err}}
 
-    def _tool_or_skill(self, tool_id: str, skill_id: str, args: Dict[str, Any], history_name: str) -> Dict[str, Any]:
-        out = self._run_tool_with_retry(tool_id, args)
-        if out.get("s") != "ok":
+    def _tool_or_skill(self, tool_id: str, skill_id: str, args: Dict[str, Any], history_name: str, prefer_skill: bool = False) -> Dict[str, Any]:
+        if prefer_skill:
             out = self._call_skill(skill_id, args)
+            if out.get("s") != "ok":
+                out = self._run_tool_with_retry(tool_id, args)
+        else:
+            out = self._run_tool_with_retry(tool_id, args)
+            if out.get("s") != "ok":
+                out = self._call_skill(skill_id, args)
         self.state.add_history(history_name, out.get("s", "error"), out)
         return out
+
+    def _advance(self, status: str):
+        self.state.tick(fsm_next_state(self.state.fsm, status))
+
+    def _valid_subs(self, subs: Any) -> bool:
+        if not isinstance(subs, list) or not subs:
+            return False
+        for s in subs:
+            if not isinstance(s, dict):
+                return False
+            c = s.get("c")
+            if not isinstance(c, str) or not c.strip():
+                return False
+        return True
+
+    def _validate_plans(self, plans: Any) -> bool:
+        if not isinstance(plans, list) or not plans:
+            return False
+        for p in plans:
+            if not isinstance(p, dict):
+                return False
+            qs = p.get("q")
+            if not isinstance(qs, list) or not qs:
+                return False
+            for q in qs:
+                if not isinstance(q, str) or not q.strip():
+                    return False
+                if len(q.split()) > 8:
+                    return False
+            lim = p.get("lim", 4)
+            if not isinstance(lim, int) or lim < 1 or lim > 10:
+                return False
+        return True
+
+    def _plans_to_tool_requests(self, plans: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        trs: List[Dict[str, Any]] = []
+        t_index = 1
+        for p in plans:
+            if not isinstance(p, dict):
+                continue
+            pid = p.get("id", "s1")
+            lim = p.get("lim", 3)
+            if not isinstance(lim, int) or lim < 1 or lim > 10:
+                lim = 4
+            queries = p.get("q", [])
+            if not isinstance(queries, list):
+                continue
+            for q in queries:
+                if not isinstance(q, str) or not q.strip():
+                    continue
+                trs.append(
+                    {
+                        "id": f"t{t_index}",
+                        "args": {"q": q.strip(), "lim": lim},
+                        "for": pid,
+                    }
+                )
+                t_index += 1
+        return trs
 
     def _dedupe_evidence(self, items: List[EvidenceItem]) -> List[EvidenceItem]:
         seen: Set[str] = set()
@@ -228,6 +293,29 @@ class Orchestrator:
     def _content_terms(self, text: str) -> Set[str]:
         terms = set(re.findall(r"[a-z0-9]+", (text or "").lower()))
         return {t for t in terms if t not in _STOPWORDS}
+
+    def _min_overlap(self, claim_terms: Set[str]) -> int:
+        if not claim_terms:
+            return 0
+        return 1 if len(claim_terms) <= 3 else 2
+
+    def _sentence_relevant(self, claim_terms: Set[str], sent: str, min_overlap: int) -> bool:
+        if not sent:
+            return False
+        sent_terms = self._content_terms(sent)
+        return len(claim_terms.intersection(sent_terms)) >= min_overlap
+
+    def _relevance_ok(self, claim_text: str, rows: List[Dict[str, Any]]) -> bool:
+        claim_terms = self._content_terms(claim_text)
+        if not claim_terms:
+            return True
+        min_overlap = self._min_overlap(claim_terms)
+        best = 0
+        for r in rows:
+            text = f"{r.get('snippet','')} {r.get('title','')}"
+            terms = self._content_terms(text)
+            best = max(best, len(claim_terms.intersection(terms)))
+        return best >= min_overlap
 
     def _filter_selected(self, selected: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if not selected:
@@ -286,6 +374,8 @@ class Orchestrator:
         max_bytes = max(50_000, _env_int("WIKI_MAX_BYTES", 200_000))
         timeout = max(5, _env_int("WIKI_TIMEOUT", 10))
         out_items: List[EvidenceItem] = []
+        claim_terms = self._content_terms(claim_text)
+        min_overlap = self._min_overlap(claim_terms)
         for r in rows:
             if max_pages <= 0:
                 break
@@ -299,6 +389,8 @@ class Orchestrator:
             base = f"{r.get('src','wiki')}:{r.get('rid','')}"
             for i, sent in enumerate(sentences, start=1):
                 if not sent:
+                    continue
+                if claim_terms and not self._sentence_relevant(claim_terms, sent, min_overlap):
                     continue
                 out_items.append(
                     EvidenceItem(
@@ -351,6 +443,7 @@ class Orchestrator:
         for c in self.state.claims:
             if isinstance(c, dict):
                 claim_map[c.get("id", "")] = c.get("c", "")
+        wiki_disabled = _env_int("WIKI_FETCH_LIMIT", 2) == 0
         for tr in requests:
             args = tr.get("args", {})
             claim_id = tr.get("for", "")
@@ -360,7 +453,7 @@ class Orchestrator:
 
             # Priority: wiki search (free!) > local kb_lookup (free~) > web_search (API Key... $$$)
             candidates: List[Dict[str, Any]] = []
-            if allow_tool(self.state.fsm, "search"):
+            if allow_tool(self.state.fsm, "search") and not wiki_disabled:
                 candidates.append({"tool": "search", "args": {"q": q, "lim": lim, "src": "wiki"}})
             if allow_tool(self.state.fsm, "kb_lookup"):
                 candidates.append({"tool": "kb_lookup", "args": {"q": q, "lim": lim}})
@@ -377,6 +470,9 @@ class Orchestrator:
                     continue
                 rows = extract_evidence_rows(out)
                 if not rows:
+                    continue
+                if claim_text and not self._relevance_ok(claim_text, rows):
+                    self.state.add_history("tool:retrieval_low_overlap", "retry", {"tool": tool_id, "q": q})
                     continue
                 collected.extend(self._rows_to_evidence(rows, claim_id))
                 collected.extend(self._expand_wiki_evidence(rows, claim_id, claim_text))
@@ -413,8 +509,7 @@ class Orchestrator:
         steps = 0
         while steps < max_steps:
             steps += 1
-            
-            # State Machine Behaviors
+
             if self.state.fsm == "PARSE_CLAIM":
                 out = self._tool_or_skill(
                     "claim_normalize",
@@ -422,69 +517,87 @@ class Orchestrator:
                     {"c": claim, "ctx": None, "lang": "en", "st": {"sid": self.state.sid, "rev": self.state.rev, "fsm": self.state.fsm}},
                     "claim_normalizer",
                 )
-                if out["s"] != "ok":
+                if out.get("s") != "ok":
                     self._set_default_verdicts()
-                    self.state.tick("OUTPUT")
+                    self._advance("error")
                     continue
                 d = out.get("d") or {}
                 self.state.norm_claim = d.get("nc")
+                self.state.claims = [{"id": "s1", "c": d.get("nc", claim)}]
+
                 if d.get("sd"):
                     out2 = self._tool_or_skill(
                         "claim_decompose",
                         "claim_decomposer",
                         {"nc": d.get("nc"), "lang": "en", "st": {"sid": self.state.sid, "rev": self.state.rev, "fsm": self.state.fsm}},
                         "claim_decomposer",
+                        prefer_skill=True,
                     )
-                    if out2["s"] == "ok":
-                        self.state.claims = out2.get("d", {}).get("subs", [])
-                else:
-                    self.state.claims = [{"id": "s1", "c": d.get("nc", claim)}]
+                    subs = out2.get("d", {}).get("subs", []) if out2.get("s") == "ok" else []
+                    if not self._valid_subs(subs):
+                        out2 = self._tool_or_skill(
+                            "claim_decompose",
+                            "claim_decomposer",
+                            {"nc": d.get("nc"), "lang": "en", "st": {"sid": self.state.sid, "rev": self.state.rev, "fsm": self.state.fsm}},
+                            "claim_decomposer_fallback",
+                        )
+                        subs = out2.get("d", {}).get("subs", []) if out2.get("s") == "ok" else []
+                    if self._valid_subs(subs):
+                        self.state.claims = subs
+
+                plan_args = {"claims": self.state.claims, "st": {"sid": self.state.sid, "rev": self.state.rev, "fsm": self.state.fsm}, "hints": None}
                 out3 = self._tool_or_skill(
                     "evidence_query_plan",
                     "evidence_query_planner",
-                    {"claims": self.state.claims, "st": {"sid": self.state.sid, "rev": self.state.rev, "fsm": self.state.fsm}, "hints": None},
+                    plan_args,
                     "evidence_query_planner",
+                    prefer_skill=True,
                 )
-                self.state.plans = out3.get("d", {}).get("plans", []) if out3["s"] == "ok" else []
-                if not self.state.plans:
-                    # Safe fallback: single query per claim.
-                    self.state.plans = [{"id": c.get("id", "s1"), "q": [c.get("c", "")], "src": ["wiki", "kb", "web"], "lim": 4} for c in self.state.claims]
-                self.state.tick("RETRIEVAL")
+                plans = out3.get("d", {}).get("plans", []) if out3.get("s") == "ok" else []
+                if not self._validate_plans(plans):
+                    out3 = self._tool_or_skill(
+                        "evidence_query_plan",
+                        "evidence_query_planner",
+                        plan_args,
+                        "evidence_query_planner_fallback",
+                    )
+                    plans = out3.get("d", {}).get("plans", []) if out3.get("s") == "ok" else []
+
+                if not self._validate_plans(plans):
+                    plans = [{"id": c.get("id", "s1"), "q": [c.get("c", "")], "src": ["wiki", "kb", "web"], "lim": 4} for c in self.state.claims]
+                self.state.plans = plans
+                self._advance("ok")
                 continue
 
             if self.state.fsm == "RETRIEVAL":
-                out = self._tool_or_skill(
-                    "tool_request_compose",
-                    "tool_request_composer",
-                    {"plans": self.state.plans, "st": {"sid": self.state.sid, "rev": self.state.rev, "fsm": self.state.fsm}},
-                    "tool_request_composer",
-                )
-                if out["s"] != "ok":
+                self.state.tool_requests = self._plans_to_tool_requests(self.state.plans)
+                if not self.state.tool_requests:
                     tries = state_retries.get("RETRIEVAL", 0) + 1
                     state_retries["RETRIEVAL"] = tries
+                    self.state.add_history("tool_request_build", "error", {"tries": tries})
                     if tries <= self.n_retry:
-                        self.state.tick("RETRIEVAL")
+                        self._advance("retry")
                         continue
                     self._set_default_verdicts()
-                    self.state.tick("OUTPUT")
+                    self._advance("error")
                     continue
 
-                self.state.tool_requests = out.get("d", {}).get("tr", [])
+                self.state.add_history("tool_request_build", "ok", {"n": len(self.state.tool_requests)})
+
                 ev = self._exec_tool_requests(self.state.tool_requests)
                 if ev:
                     self.state.add_evidence(ev)
-                    self.state.tick("SELECT_EVIDENCE")
+                    self._advance("ok")
                     continue
 
-                # Empty evidence is still valid: retry retrieval TOP_N times before conclude a NEI
                 tries = state_retries.get("RETRIEVAL_EMPTY", 0) + 1
                 state_retries["RETRIEVAL_EMPTY"] = tries
                 self.state.add_history("retrieval_empty", "retry", {"tries": tries})
                 if tries <= self.n_retry:
-                    self.state.tick("RETRIEVAL")
+                    self._advance("retry")
                     continue
                 self._set_default_verdicts()
-                self.state.tick("OUTPUT")
+                self._advance("error")
                 continue
 
             if self.state.fsm == "SELECT_EVIDENCE":
@@ -493,11 +606,11 @@ class Orchestrator:
                     for e in self.state.evidence
                 ]
                 if not ev_in:
-                    self.state.tick("RETRIEVAL")
+                    self._advance("back")
                     continue
                 out = self._call_skill("evidence_filter", {"claims": self.state.claims, "ev": ev_in, "st": {"sid": self.state.sid, "rev": self.state.rev, "fsm": self.state.fsm}})
-                self.state.add_history("evidence_filter", out["s"], out)
-                if out["s"] == "ok":
+                self.state.add_history("evidence_filter", out.get("s", "error"), out)
+                if out.get("s") == "ok":
                     raw_sel = out.get("d", {}).get("sel", [])
                     self.state.selected = self._filter_selected(raw_sel)
                     if raw_sel and not self.state.selected:
@@ -508,15 +621,15 @@ class Orchestrator:
                         self.state.selected = fallback_sel
                         self.state.add_history("evidence_filter_fallback", "ok", {"selected_n": len(fallback_sel)})
                 if self.state.selected:
-                    self.state.tick("NLI_VERIFY")
+                    self._advance("ok")
                     continue
                 tries = state_retries.get("SELECT_EVIDENCE_EMPTY", 0) + 1
                 state_retries["SELECT_EVIDENCE_EMPTY"] = tries
                 if tries <= self.n_retry:
-                    self.state.tick("RETRIEVAL")
+                    self._advance("back")
                     continue
                 self._set_default_verdicts()
-                self.state.tick("OUTPUT")
+                self._advance("error")
                 continue
 
             if self.state.fsm == "NLI_VERIFY":
@@ -524,7 +637,7 @@ class Orchestrator:
                 sel_in = [{"eid": e.eid, "for": e.claim_id, "s": e.s, "cred": e.cred} for e in self.state.evidence if e.eid in selected_ids]
                 if not sel_in:
                     self._set_default_verdicts()
-                    self.state.tick("OUTPUT")
+                    self._advance("error")
                     continue
                 out = self._tool_or_skill(
                     "nli_score",
@@ -532,12 +645,12 @@ class Orchestrator:
                     {"claims": self.state.claims, "sel": sel_in, "st": {"sid": self.state.sid, "rev": self.state.rev, "fsm": self.state.fsm}},
                     "evidence_stance_scorer",
                 )
-                if out["s"] == "ok":
+                if out.get("s") == "ok":
                     self.state.scores = out.get("d", {}).get("scores", [])
-                    self.state.tick("DECIDE")
+                    self._advance("ok")
                     continue
                 self._set_default_verdicts()
-                self.state.tick("OUTPUT")
+                self._advance("error")
                 continue
 
             if self.state.fsm == "DECIDE":
@@ -547,11 +660,11 @@ class Orchestrator:
                     {"claims": self.state.claims, "scores": self.state.scores, "st": {"sid": self.state.sid, "rev": self.state.rev, "fsm": self.state.fsm}},
                     "verdict_aggregator",
                 )
-                if out["s"] == "ok":
+                if out.get("s") == "ok":
                     self.state.verdicts = out.get("d", {}).get("ver", [])
                 if not self.state.verdicts:
                     self._set_default_verdicts()
-                self.state.tick("OUTPUT")
+                self._advance("ok")
                 continue
 
             if self.state.fsm == "OUTPUT":
@@ -563,10 +676,9 @@ class Orchestrator:
                     {"claims": self.state.claims, "ver": self.state.verdicts, "use": self.state.selected, "st": {"sid": self.state.sid, "rev": self.state.rev, "fsm": self.state.fsm}},
                     "response_composer",
                 )
-                if out["s"] == "ok":
+                if out.get("s") == "ok":
                     self.state.output = out.get("d")
                     return out
-                # Final fallback that still returns valid output
                 return {
                     "s": "ok",
                     "d": {"out": [{"id": c.get("id", "s1"), "ver": "insufficient", "conf": "low", "r": "Insufficient evidence after retries.", "cite": []} for c in self.state.claims]},
@@ -578,3 +690,4 @@ class Orchestrator:
         return {"s": "ok", "d": {"out": [{"id": c.get("id", "s1"), "ver": "insufficient", "conf": "low", "r": "Max steps reached.", "cite": []} for c in self.state.claims]}, "e": None, "rb": "none"}
 
 # Algorithms are FUN !!
+
