@@ -49,9 +49,62 @@ _OPPOSITE_PAIRS = [
 ]
 
 
+_SYNONYMS = {
+    "born": "birth",
+    "birth": "birth",
+    "died": "death",
+    "death": "death",
+    "married": "marry",
+    "marriage": "marry",
+    "released": "release",
+    "release": "release",
+    "wins": "win",
+    "won": "win",
+    "loses": "lose",
+    "lost": "lose",
+    "founded": "found",
+    "founding": "found",
+    "invented": "invent",
+    "inventor": "invent",
+}
+
+
+def _normalize_token(tok):
+    t = tok.lower()
+    if t.endswith("'s"):
+        t = t[:-2]
+    # Light stemming to improve overlap without extra deps.
+    for suf in ("ing", "ed", "es", "s"):
+        if t.endswith(suf) and len(t) > len(suf) + 2:
+            t = t[: -len(suf)]
+            break
+    return _SYNONYMS.get(t, t)
+
+
 def _content_tokens(text):
     toks = _tokens(text)
-    return [t for t in toks if t not in _STOPWORDS]
+    out = []
+    for t in toks:
+        if t in _STOPWORDS:
+            continue
+        out.append(_normalize_token(t))
+    return out
+
+
+def _entity_tokens(text):
+    if not text:
+        return set()
+    spans = re.findall(r"(?:\b[A-Z][a-z]+\b(?:\s+\b[A-Z][a-z]+\b){0,3})", text)
+    mixed = re.findall(r"\b[A-Za-z]*[A-Z][A-Za-z]*\b", text)
+    ents = set()
+    for s in spans:
+        for t in s.split():
+            if len(t) >= 2:
+                ents.add(_normalize_token(t))
+    for m in mixed:
+        if len(m) >= 2:
+            ents.add(_normalize_token(m))
+    return ents
 
 
 def _has_opposite_pair(claim, sent):
@@ -101,12 +154,14 @@ def _env_int(name, default):
 
 def _score_pair(claim, sent):
     _load_runtime_env()
-    neutral_ratio = _env_float("NLI_NEUTRAL_RATIO", 0.18)
+    neutral_ratio = _env_float("NLI_NEUTRAL_RATIO", 0.15)
     neutral_overlap = _env_int("NLI_NEUTRAL_OVERLAP", 1)
-    neg_refute_ratio = _env_float("NLI_NEG_REFUTE_RATIO", 0.28)
-    opp_refute_ratio = _env_float("NLI_OPP_REFUTE_RATIO", 0.25)
-    support_high_ratio = _env_float("NLI_SUPPORT_HIGH_RATIO", 0.55)
-    support_med_ratio = _env_float("NLI_SUPPORT_MED_RATIO", 0.38)
+    neg_refute_ratio = _env_float("NLI_NEG_REFUTE_RATIO", 0.25)
+    opp_refute_ratio = _env_float("NLI_OPP_REFUTE_RATIO", 0.22)
+    num_refute_ratio = _env_float("NLI_NUM_REFUTE_RATIO", 0.25)
+    year_refute_ratio = _env_float("NLI_YEAR_REFUTE_RATIO", 0.2)
+    support_high_ratio = _env_float("NLI_SUPPORT_HIGH_RATIO", 0.5)
+    support_med_ratio = _env_float("NLI_SUPPORT_MED_RATIO", 0.32)
 
     c_toks = set(_content_tokens(claim))
     s_toks = set(_content_tokens(sent))
@@ -122,14 +177,13 @@ def _score_pair(claim, sent):
 
     cy = _years(claim)
     sy = _years(sent)
-    if cy and sy and cy.isdisjoint(sy):
+    if cy and sy and cy.isdisjoint(sy) and ratio >= year_refute_ratio:
         return "refute", "high"
 
     cn = _numbers(claim)
     sn = _numbers(sent)
     # If claim has numbers and sentence has numbers but they disagree, treat as contradiction.
-    if cn and sn and not cn.issubset(sn):
-        # Only refute when the sentence has numbers but does not contain the claim numbers.
+    if cn and sn and cn.isdisjoint(sn) and ratio >= num_refute_ratio:
         return "refute", "med"
 
     c_neg = _has_negation(claim)
@@ -139,6 +193,22 @@ def _score_pair(claim, sent):
 
     if _has_opposite_pair(claim, sent) and ratio >= opp_refute_ratio:
         return "refute", "high"
+
+    # Quick substring match is a strong support signal.
+    if _normalize_text(claim) in _normalize_text(sent):
+        return "support", "high"
+
+    # If named entities don't appear in evidence, stay conservative.
+    ents = _entity_tokens(claim)
+    if ents:
+        sent_lower = (sent or "").lower()
+        if not any(e in sent_lower for e in ents) and overlap < 2:
+            return "neutral", "low"
+
+    # Require predicate overlap for support.
+    pred_terms = {t for t in c_toks if t not in ents}
+    if pred_terms and not (pred_terms & s_toks):
+        return "neutral", "low"
 
     # Support needs decent overlap but not extreme.
     if ratio >= support_high_ratio:

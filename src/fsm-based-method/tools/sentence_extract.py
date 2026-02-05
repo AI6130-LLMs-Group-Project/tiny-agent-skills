@@ -4,6 +4,7 @@ import json
 import math
 import os
 import re
+from html import unescape
 
 
 _TOP_N_DEFAULT = 3
@@ -36,8 +37,20 @@ def _ok(data):
     return {"s": "ok", "d": data, "e": None}
 
 
+def _clean_text(text):
+    if text is None:
+        return ""
+    text = unescape(str(text))
+    # Strip scripts/styles to avoid noisy tokens.
+    text = re.sub(r"(?is)<(script|style).*?>.*?</\\1>", " ", text)
+    # Strip HTML tags and common citation markers.
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"\[[^\]]+\]", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def _sent_split(text):
-    text = re.sub(r"\s+", " ", text.strip())
+    text = _clean_text(text)
     if not text:
         return []
     parts = re.split(r"(?<=[\.!\?])\s+", text)

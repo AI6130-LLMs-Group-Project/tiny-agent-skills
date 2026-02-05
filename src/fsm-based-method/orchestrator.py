@@ -16,6 +16,11 @@ from state import AgentState, EvidenceItem, load_env
 
 
 ### LLM Client and Tool Executor =====================
+_STOPWORDS = {
+    "the", "a", "an", "is", "are", "was", "were", "be", "been", "being", "to", "of", "in", "on", "at",
+    "for", "from", "by", "as", "that", "this", "it", "its", "and", "or", "with", "during", "into", "over",
+    "under", "than", "then", "who", "what", "when", "where", "which",
+}
 
 class LlamaCppClient:
     def __init__(self, endpoint: str):
@@ -99,6 +104,15 @@ def _extract_json(text: str) -> Dict[str, Any]:
     raise ValueError("no valid JSON object found")
 
 
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, default))
+    except Exception:
+        return default
+
+
+
+
 ### Main Orchestrator Class ===================
 
 ### A reminder from Hanny:
@@ -118,6 +132,7 @@ class Orchestrator:
         self.llm = LlamaCppClient(endpoint)
         self.state = state
         self.tools = ToolExecutor()
+        self._page_cache: Dict[str, List[str]] = {}
 
     def _call_skill(self, skill_id: str, input_data: Dict[str, Any]) -> Dict[str, Any]:
         if not allow_skill(self.state.fsm, skill_id):
@@ -177,8 +192,135 @@ class Orchestrator:
             last_err = msg
         return {"s": "error", "d": None, "e": {"code": "BAD_TOOL_OUTPUT", "msg": last_err}}
 
+    def _tool_or_skill(self, tool_id: str, skill_id: str, args: Dict[str, Any], history_name: str) -> Dict[str, Any]:
+        out = self._run_tool_with_retry(tool_id, args)
+        if out.get("s") != "ok":
+            out = self._call_skill(skill_id, args)
+        self.state.add_history(history_name, out.get("s", "error"), out)
+        return out
+
+    def _dedupe_evidence(self, items: List[EvidenceItem]) -> List[EvidenceItem]:
+        seen: Set[str] = set()
+        out: List[EvidenceItem] = []
+        for it in items:
+            key = (it.s or "").strip().lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            out.append(it)
+        return out
+
+    def _extract_entity_terms(self, text: str) -> Set[str]:
+        if not text:
+            return set()
+        spans = re.findall(r"(?:\b[A-Z][a-z]+\b(?:\s+\b[A-Z][a-z]+\b){0,3})", text)
+        mixed = re.findall(r"\b[A-Za-z]*[A-Z][A-Za-z]*\b", text)
+        terms = set()
+        for s in spans:
+            for t in s.split():
+                if len(t) >= 2:
+                    terms.add(t.lower())
+        for m in mixed:
+            if len(m) >= 2:
+                terms.add(m.lower())
+        return terms
+
+    def _content_terms(self, text: str) -> Set[str]:
+        terms = set(re.findall(r"[a-z0-9]+", (text or "").lower()))
+        return {t for t in terms if t not in _STOPWORDS}
+
+    def _filter_selected(self, selected: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if not selected:
+            return []
+        ev_map = {e.eid: e for e in self.state.evidence}
+        claim_map = {c.get("id", ""): c.get("c", "") for c in self.state.claims if isinstance(c, dict)}
+        out = []
+        for sel in selected:
+            if not isinstance(sel, dict):
+                continue
+            eid = sel.get("eid")
+            cid = sel.get("for", "")
+            ev = ev_map.get(eid)
+            claim_text = claim_map.get(cid, "")
+            if not ev or not claim_text:
+                continue
+            ent = self._extract_entity_terms(claim_text)
+            claim_terms = self._content_terms(claim_text)
+            pred = set(t for t in claim_terms if t not in ent)
+            ev_terms = self._content_terms(ev.s or "")
+            if ent and not (ent & ev_terms):
+                continue
+            if pred and not (pred & ev_terms):
+                continue
+            out.append(sel)
+        return out
+
+    def _fetch_sentences(self, url: str, query: str, top_n: int, max_bytes: int, timeout: int) -> List[str]:
+        if url in self._page_cache:
+            return self._page_cache[url]
+        out = self._run_tool_with_retry("page_fetch", {"url": url, "max_bytes": max_bytes, "timeout": timeout})
+        self.state.add_history("tool:page_fetch", out.get("s", "error"), {"url": url, "e": out.get("e")})
+        if out.get("s") != "ok":
+            self._page_cache[url] = []
+            return []
+        text = out.get("d", {}).get("text", "")
+        out2 = self._run_tool_with_retry("sentence_extract", {"text": text, "query": query, "top_n": top_n})
+        self.state.add_history("tool:sentence_extract", out2.get("s", "error"), {"url": url, "e": out2.get("e")})
+        if out2.get("s") != "ok":
+            self._page_cache[url] = []
+            return []
+        sentences = []
+        for item in out2.get("d", {}).get("sentences", []):
+            if isinstance(item, dict) and item.get("s"):
+                sentences.append(item.get("s"))
+        self._page_cache[url] = sentences
+        return sentences
+
+    def _expand_wiki_evidence(self, rows: List[Dict[str, Any]], claim_id: str, claim_text: str) -> List[EvidenceItem]:
+        if not rows or not claim_text:
+            return []
+        max_pages = max(0, _env_int("WIKI_FETCH_LIMIT", 2))
+        if max_pages == 0:
+            return []
+        top_n = max(1, _env_int("TOP_N", 3))
+        max_bytes = max(50_000, _env_int("WIKI_MAX_BYTES", 200_000))
+        timeout = max(5, _env_int("WIKI_TIMEOUT", 10))
+        out_items: List[EvidenceItem] = []
+        for r in rows:
+            if max_pages <= 0:
+                break
+            if r.get("src") != "wiki":
+                continue
+            url = r.get("url") or ""
+            if not url:
+                continue
+            max_pages -= 1
+            sentences = self._fetch_sentences(url, claim_text, top_n, max_bytes, timeout)
+            base = f"{r.get('src','wiki')}:{r.get('rid','')}"
+            for i, sent in enumerate(sentences, start=1):
+                if not sent:
+                    continue
+                out_items.append(
+                    EvidenceItem(
+                        eid=f"{base}:s{i}",
+                        claim_id=claim_id,
+                        s=sent,
+                        src=url,
+                        d=r.get("d"),
+                        cred="high",
+                    )
+                )
+        return out_items
+
     def _rows_to_evidence(self, rows: List[Dict[str, Any]], claim_id: str) -> List[EvidenceItem]:
         items: List[EvidenceItem] = []
+        default_cred = {
+            "wiki": "low",
+            "web": "low",
+            "news": "low",
+            "kb": "med",
+            "extract": "med",
+        }
         for r in rows:
             if not isinstance(r, dict):
                 continue
@@ -188,6 +330,9 @@ class Orchestrator:
             text = re.sub(r"<[^>]+>", " ", str(text))
             text = " ".join(text.split())
             eid = f"{r.get('src','web')}:{r.get('rid','')}"
+            cred = r.get("cred")
+            if not cred:
+                cred = default_cred.get(r.get("src"), "med")
             items.append(
                 EvidenceItem(
                     eid=eid,
@@ -195,18 +340,23 @@ class Orchestrator:
                     s=text,
                     src=r.get("url") or r.get("src", ""),
                     d=r.get("d"),
-                    cred=r.get("cred", "med"),
+                    cred=cred,
                 )
             )
         return items
 
     def _exec_tool_requests(self, requests: List[Dict[str, Any]]) -> List[EvidenceItem]:
         collected: List[EvidenceItem] = []
+        claim_map = {}
+        for c in self.state.claims:
+            if isinstance(c, dict):
+                claim_map[c.get("id", "")] = c.get("c", "")
         for tr in requests:
             args = tr.get("args", {})
             claim_id = tr.get("for", "")
             q = args.get("q", "")
             lim = args.get("lim", 3)
+            claim_text = claim_map.get(claim_id, "")
 
             # Priority: wiki search (free!) > local kb_lookup (free~) > web_search (API Key... $$$)
             candidates: List[Dict[str, Any]] = []
@@ -229,12 +379,13 @@ class Orchestrator:
                 if not rows:
                     continue
                 collected.extend(self._rows_to_evidence(rows, claim_id))
+                collected.extend(self._expand_wiki_evidence(rows, claim_id, claim_text))
                 got_rows = True
                 break
 
             if not got_rows:
                 self.state.add_history("tool:retrieval_miss", "retry", {"q": q, "claim_id": claim_id})
-        return collected
+        return self._dedupe_evidence(collected)
 
     def _fallback_select_evidence(self, ev_in: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         claim_text = " ".join(c.get("c", "") for c in self.state.claims).lower()
@@ -265,13 +416,12 @@ class Orchestrator:
             
             # State Machine Behaviors
             if self.state.fsm == "PARSE_CLAIM":
-                out = self._run_tool_with_retry(
+                out = self._tool_or_skill(
                     "claim_normalize",
+                    "claim_normalizer",
                     {"c": claim, "ctx": None, "lang": "en", "st": {"sid": self.state.sid, "rev": self.state.rev, "fsm": self.state.fsm}},
+                    "claim_normalizer",
                 )
-                if out.get("s") != "ok":
-                    out = self._call_skill("claim_normalizer", {"c": claim, "ctx": None, "lang": "en", "st": {"sid": self.state.sid, "rev": self.state.rev, "fsm": self.state.fsm}})
-                self.state.add_history("claim_normalizer", out["s"], out)
                 if out["s"] != "ok":
                     self._set_default_verdicts()
                     self.state.tick("OUTPUT")
@@ -279,24 +429,22 @@ class Orchestrator:
                 d = out.get("d") or {}
                 self.state.norm_claim = d.get("nc")
                 if d.get("sd"):
-                    out2 = self._run_tool_with_retry(
+                    out2 = self._tool_or_skill(
                         "claim_decompose",
+                        "claim_decomposer",
                         {"nc": d.get("nc"), "lang": "en", "st": {"sid": self.state.sid, "rev": self.state.rev, "fsm": self.state.fsm}},
+                        "claim_decomposer",
                     )
-                    if out2.get("s") != "ok":
-                        out2 = self._call_skill("claim_decomposer", {"nc": d.get("nc"), "lang": "en", "st": {"sid": self.state.sid, "rev": self.state.rev, "fsm": self.state.fsm}})
-                    self.state.add_history("claim_decomposer", out2["s"], out2)
                     if out2["s"] == "ok":
                         self.state.claims = out2.get("d", {}).get("subs", [])
                 else:
                     self.state.claims = [{"id": "s1", "c": d.get("nc", claim)}]
-                out3 = self._run_tool_with_retry(
+                out3 = self._tool_or_skill(
                     "evidence_query_plan",
+                    "evidence_query_planner",
                     {"claims": self.state.claims, "st": {"sid": self.state.sid, "rev": self.state.rev, "fsm": self.state.fsm}, "hints": None},
+                    "evidence_query_planner",
                 )
-                if out3.get("s") != "ok":
-                    out3 = self._call_skill("evidence_query_planner", {"claims": self.state.claims, "st": {"sid": self.state.sid, "rev": self.state.rev, "fsm": self.state.fsm}, "hints": None})
-                self.state.add_history("evidence_query_planner", out3["s"], out3)
                 self.state.plans = out3.get("d", {}).get("plans", []) if out3["s"] == "ok" else []
                 if not self.state.plans:
                     # Safe fallback: single query per claim.
@@ -305,13 +453,12 @@ class Orchestrator:
                 continue
 
             if self.state.fsm == "RETRIEVAL":
-                out = self._run_tool_with_retry(
+                out = self._tool_or_skill(
                     "tool_request_compose",
+                    "tool_request_composer",
                     {"plans": self.state.plans, "st": {"sid": self.state.sid, "rev": self.state.rev, "fsm": self.state.fsm}},
+                    "tool_request_composer",
                 )
-                if out.get("s") != "ok":
-                    out = self._call_skill("tool_request_composer", {"plans": self.state.plans, "st": {"sid": self.state.sid, "rev": self.state.rev, "fsm": self.state.fsm}})
-                self.state.add_history("tool_request_composer", out["s"], out)
                 if out["s"] != "ok":
                     tries = state_retries.get("RETRIEVAL", 0) + 1
                     state_retries["RETRIEVAL"] = tries
@@ -351,7 +498,10 @@ class Orchestrator:
                 out = self._call_skill("evidence_filter", {"claims": self.state.claims, "ev": ev_in, "st": {"sid": self.state.sid, "rev": self.state.rev, "fsm": self.state.fsm}})
                 self.state.add_history("evidence_filter", out["s"], out)
                 if out["s"] == "ok":
-                    self.state.selected = out.get("d", {}).get("sel", [])
+                    raw_sel = out.get("d", {}).get("sel", [])
+                    self.state.selected = self._filter_selected(raw_sel)
+                    if raw_sel and not self.state.selected:
+                        self.state.add_history("evidence_filter_validate", "retry", {"msg": "selection failed overlap checks"})
                 if not self.state.selected:
                     fallback_sel = self._fallback_select_evidence(ev_in)
                     if fallback_sel:
@@ -376,13 +526,12 @@ class Orchestrator:
                     self._set_default_verdicts()
                     self.state.tick("OUTPUT")
                     continue
-                out = self._run_tool_with_retry(
+                out = self._tool_or_skill(
                     "nli_score",
+                    "evidence_stance_scorer",
                     {"claims": self.state.claims, "sel": sel_in, "st": {"sid": self.state.sid, "rev": self.state.rev, "fsm": self.state.fsm}},
+                    "evidence_stance_scorer",
                 )
-                if out.get("s") != "ok":
-                    out = self._call_skill("evidence_stance_scorer", {"claims": self.state.claims, "sel": sel_in, "st": {"sid": self.state.sid, "rev": self.state.rev, "fsm": self.state.fsm}})
-                self.state.add_history("evidence_stance_scorer", out["s"], out)
                 if out["s"] == "ok":
                     self.state.scores = out.get("d", {}).get("scores", [])
                     self.state.tick("DECIDE")
@@ -392,13 +541,12 @@ class Orchestrator:
                 continue
 
             if self.state.fsm == "DECIDE":
-                out = self._run_tool_with_retry(
+                out = self._tool_or_skill(
                     "verdict_aggregate",
+                    "verdict_aggregator",
                     {"claims": self.state.claims, "scores": self.state.scores, "st": {"sid": self.state.sid, "rev": self.state.rev, "fsm": self.state.fsm}},
+                    "verdict_aggregator",
                 )
-                if out.get("s") != "ok":
-                    out = self._call_skill("verdict_aggregator", {"claims": self.state.claims, "scores": self.state.scores, "st": {"sid": self.state.sid, "rev": self.state.rev, "fsm": self.state.fsm}})
-                self.state.add_history("verdict_aggregator", out["s"], out)
                 if out["s"] == "ok":
                     self.state.verdicts = out.get("d", {}).get("ver", [])
                 if not self.state.verdicts:
@@ -409,13 +557,12 @@ class Orchestrator:
             if self.state.fsm == "OUTPUT":
                 if not self.state.verdicts:
                     self._set_default_verdicts()
-                out = self._run_tool_with_retry(
+                out = self._tool_or_skill(
                     "response_compose",
+                    "response_composer",
                     {"claims": self.state.claims, "ver": self.state.verdicts, "use": self.state.selected, "st": {"sid": self.state.sid, "rev": self.state.rev, "fsm": self.state.fsm}},
+                    "response_composer",
                 )
-                if out.get("s") != "ok":
-                    out = self._call_skill("response_composer", {"claims": self.state.claims, "ver": self.state.verdicts, "use": self.state.selected, "st": {"sid": self.state.sid, "rev": self.state.rev, "fsm": self.state.fsm}})
-                self.state.add_history("response_composer", out["s"], out)
                 if out["s"] == "ok":
                     self.state.output = out.get("d")
                     return out

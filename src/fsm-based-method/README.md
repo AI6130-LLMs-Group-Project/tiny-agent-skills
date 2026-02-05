@@ -18,6 +18,8 @@ Create `src/fsm-based-method/.env` (copy from `.env.example`) and set:
 - `WEB_SEARCH_PROVIDER=serpapi|tavily` and corresponding API key(s), as a backup from wiki
 - `KB_PATH=runtime/evidence.jsonl`
 - `TOP_N=3` (Top-N matched sentences picked from source)
+- `WIKI_FETCH_LIMIT=2` (per query, expand top wiki pages into sentences)
+- `WIKI_MAX_BYTES=200000` and `WIKI_TIMEOUT=10` (page fetch limits)
 
 ## Start the API
 
