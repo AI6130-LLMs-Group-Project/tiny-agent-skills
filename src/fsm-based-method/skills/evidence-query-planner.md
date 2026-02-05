@@ -36,7 +36,7 @@ Produce minimal search/retrieval query plans for each subclaim.
 ```
 
 ## Allowed tools
-- none (no direct tool calls); executor may use `tool.search`, `tool.web_search`, or `tool.kb_lookup` based on `src`
+- `tool.evidence_query_plan` (preferred deterministic path); executor may use `tool.search`, `tool.web_search`, or `tool.kb_lookup` based on `src`
 
 ## Algorithm/logic steps
 1. For each claim, extract 2-4 key terms and any named entities.

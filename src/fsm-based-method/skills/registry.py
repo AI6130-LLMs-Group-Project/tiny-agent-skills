@@ -109,6 +109,11 @@ TOOLS = {
         "module": "fsm-based-method.tools.verdict_aggregate",
         "path": str(_TOOLS_DIR / "verdict_aggregate.py"),
     },
+    "evidence_query_plan": {
+        "id": "evidence_query_plan",
+        "module": "fsm-based-method.tools.evidence_query_plan",
+        "path": str(_TOOLS_DIR / "evidence_query_plan.py"),
+    },
 }
 
 

@@ -134,7 +134,11 @@ class Orchestrator:
             prompt_suffix = ""
             if attempt > 0:
                 prompt_suffix = "\n\nIMPORTANT: prior output failed schema/JSON checks. Output one JSON object only."
-            raw = self.llm.complete(system, user + prompt_suffix, temperature=0.0, max_tokens=512)
+            try:
+                raw = self.llm.complete(system, user + prompt_suffix, temperature=0.0, max_tokens=512)
+            except Exception as exc:
+                last_err = f"LLM_CALL_FAIL: {exc}"
+                continue
             try:
                 data = _extract_json(raw)
             except Exception as exc:
@@ -286,9 +290,17 @@ class Orchestrator:
                         self.state.claims = out2.get("d", {}).get("subs", [])
                 else:
                     self.state.claims = [{"id": "s1", "c": d.get("nc", claim)}]
-                out3 = self._call_skill("evidence_query_planner", {"claims": self.state.claims, "st": {"sid": self.state.sid, "rev": self.state.rev, "fsm": self.state.fsm}, "hints": None})
+                out3 = self._run_tool_with_retry(
+                    "evidence_query_plan",
+                    {"claims": self.state.claims, "st": {"sid": self.state.sid, "rev": self.state.rev, "fsm": self.state.fsm}, "hints": None},
+                )
+                if out3.get("s") != "ok":
+                    out3 = self._call_skill("evidence_query_planner", {"claims": self.state.claims, "st": {"sid": self.state.sid, "rev": self.state.rev, "fsm": self.state.fsm}, "hints": None})
                 self.state.add_history("evidence_query_planner", out3["s"], out3)
                 self.state.plans = out3.get("d", {}).get("plans", []) if out3["s"] == "ok" else []
+                if not self.state.plans:
+                    # Safe fallback: single query per claim.
+                    self.state.plans = [{"id": c.get("id", "s1"), "q": [c.get("c", "")], "src": ["wiki", "kb", "web"], "lim": 4} for c in self.state.claims]
                 self.state.tick("RETRIEVAL")
                 continue
 

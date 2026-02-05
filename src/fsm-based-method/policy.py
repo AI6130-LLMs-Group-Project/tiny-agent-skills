@@ -29,6 +29,7 @@ TOOL_SCOPE = {
     "PARSE_CLAIM": [
         "claim_normalize",
         "claim_decompose",
+        "evidence_query_plan",
     ],
     "RETRIEVAL": [
         "tool_request_compose",
