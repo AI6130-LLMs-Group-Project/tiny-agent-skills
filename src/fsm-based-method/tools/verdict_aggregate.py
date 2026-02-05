@@ -1,4 +1,4 @@
-### Verdictt aggregation (conservative against false SUPPORT)
+### Verdictt aggregation (added to against false SUPPORT)
 
 
 def _err(code, msg):

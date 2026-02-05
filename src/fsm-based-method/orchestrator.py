@@ -380,7 +380,12 @@ class Orchestrator:
                 continue
 
             if self.state.fsm == "DECIDE":
-                out = self._call_skill("verdict_aggregator", {"claims": self.state.claims, "scores": self.state.scores, "st": {"sid": self.state.sid, "rev": self.state.rev, "fsm": self.state.fsm}})
+                out = self._run_tool_with_retry(
+                    "verdict_aggregate",
+                    {"claims": self.state.claims, "scores": self.state.scores, "st": {"sid": self.state.sid, "rev": self.state.rev, "fsm": self.state.fsm}},
+                )
+                if out.get("s") != "ok":
+                    out = self._call_skill("verdict_aggregator", {"claims": self.state.claims, "scores": self.state.scores, "st": {"sid": self.state.sid, "rev": self.state.rev, "fsm": self.state.fsm}})
                 self.state.add_history("verdict_aggregator", out["s"], out)
                 if out["s"] == "ok":
                     self.state.verdicts = out.get("d", {}).get("ver", [])
