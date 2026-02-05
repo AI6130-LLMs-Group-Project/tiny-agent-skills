@@ -104,6 +104,11 @@ TOOLS = {
         "module": "fsm-based-method.tools.response_compose",
         "path": str(_TOOLS_DIR / "response_compose.py"),
     },
+    "verdict_aggregate": {
+        "id": "verdict_aggregate",
+        "module": "fsm-based-method.tools.verdict_aggregate",
+        "path": str(_TOOLS_DIR / "verdict_aggregate.py"),
+    },
 }
 
 

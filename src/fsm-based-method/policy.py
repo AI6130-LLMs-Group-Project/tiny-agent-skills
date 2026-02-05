@@ -1,6 +1,6 @@
 ### Define allowed skills and tools for each FSM state (scoping)
 
-# FSM State > skills
+# FSM State > skills (added at least one skill per state)
 SKILL_SCOPE = {
     "PARSE_CLAIM": [
         "claim_normalizer",
@@ -42,7 +42,9 @@ TOOL_SCOPE = {
     "NLI_VERIFY": [
         "nli_score",
     ],
-    "DECIDE": [],
+    "DECIDE": [
+        "verdict_aggregate",
+    ],
     "OUTPUT": [
         "response_compose",
     ],

@@ -29,7 +29,7 @@ Aggregate per-evidence stance scores into a verdict for each claim.
 ```
 
 ## Allowed tools
-- none (no direct tool calls)
+- `tool.verdict_aggregate` (preferred deterministic path)
 
 ## Algorithm/logic steps
 1. For each claim, count support vs refute at medium/high confidence.
