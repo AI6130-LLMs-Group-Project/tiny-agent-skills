@@ -1,6 +1,6 @@
 """
-调用本地 LLM 接口（如 script/run_qwen3vl_server.sh 起的 llama-server，port 1025）。
-兼容 OpenAI 的 /v1/chat/completions，用 urllib 不额外依赖。
+Local LLM client: calls an OpenAI-compatible /v1/chat/completions endpoint (e.g. llama-server on port 1025).
+Uses urllib only; no extra dependencies.
 """
 
 from __future__ import annotations
@@ -19,8 +19,19 @@ def chat(
     max_tokens: int = 256,
 ) -> str:
     """
-    调本地 OpenAI 兼容接口，发 chat completions 请求，返回 assistant 的 content 文本。
-    base_url 默认对应 run_qwen3vl_server.sh 的 --port 1025。
+    Call local OpenAI-compatible chat completions; return assistant content text.
+
+    Input:
+      messages — list of {"role": "system"|"user"|"assistant", "content": "..."}.
+      base_url — e.g. http://localhost:1025/v1 (default matches run_qwen3vl_server.sh --port 1025).
+      model   — model name (often ignored by local server).
+      max_tokens — max reply length.
+
+    Output:
+      str — stripped assistant reply text.
+
+    Raises:
+      RuntimeError — if request fails (e.g. server not running) or response has no choices.
     """
     url = f"{base_url.rstrip('/')}/chat/completions"
     body = {
@@ -40,10 +51,10 @@ def chat(
             data = json.loads(resp.read().decode("utf-8"))
     except urllib.error.URLError as e:
         raise RuntimeError(
-            f"调用本地 LLM 失败（请先运行 bash script/run_qwen3vl_server.sh）: {e}"
+            f"Local LLM call failed (ensure bash script/run_qwen3vl_server.sh is running): {e}"
         ) from e
     choice = (data.get("choices") or [None])[0]
     if not choice:
-        raise RuntimeError(f"本地 LLM 返回无 choices: {data}")
+        raise RuntimeError(f"Local LLM returned no choices: {data}")
     content = (choice.get("message") or {}).get("content") or ""
     return content.strip()

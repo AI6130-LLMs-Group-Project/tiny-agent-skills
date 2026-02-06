@@ -1,8 +1,8 @@
 """
-paper_dev.jsonl 加载器。
+Loader for paper_dev.jsonl: one fact-verification sample per line.
 
-每行一条事实核查样本：
-- id, verifiable, label (SUPPORTS | REFUTES | NOT ENOUGH INFO), claim, evidence
+Schema per line: id, verifiable, label (SUPPORTS | REFUTES | NOT ENOUGH INFO), claim, evidence.
+Labels are normalized to pipeline output: Support, Refute, NEI.
 """
 
 from __future__ import annotations
@@ -11,7 +11,6 @@ import json
 from pathlib import Path
 from typing import Iterator
 
-# 与 pipeline 输出统一：Support / Refute / NEI
 LABEL_MAP = {
     "SUPPORTS": "Support",
     "REFUTES": "Refute",
@@ -20,12 +19,24 @@ LABEL_MAP = {
 
 
 def normalize_label(label: str) -> str:
-    """把数据集的 label 转为与 pipeline 一致的 Support / Refute / NEI。"""
+    """
+    Input:  label — raw dataset label (e.g. "SUPPORTS", "REFUTES", "NOT ENOUGH INFO").
+    Output: "Support" | "Refute" | "NEI" for pipeline comparison.
+    """
     return LABEL_MAP.get(label.upper().strip(), "NEI")
 
 
 def load_paper_dev(path: str | Path, limit: int | None = None) -> Iterator[PaperDevRecord]:
-    """逐条读取 paper_dev.jsonl，返回 PaperDevRecord。"""
+    """
+    Read paper_dev.jsonl line by line.
+
+    Input:
+      path  — path to .jsonl file.
+      limit — optional max number of records to yield.
+
+    Output:
+      Iterator[PaperDevRecord] — one record per line.
+    """
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(path)
@@ -47,7 +58,12 @@ def load_paper_dev(path: str | Path, limit: int | None = None) -> Iterator[Paper
 
 
 class PaperDevRecord:
-    """单条 paper_dev 样本。"""
+    """
+    One paper_dev sample.
+
+    Input (from JSONL): id, claim, label, verifiable, evidence.
+    Output (for pipeline): .claim (str), .gold_label ("Support"|"Refute"|"NEI").
+    """
 
     __slots__ = ("id", "claim", "label", "verifiable", "evidence")
 
@@ -67,5 +83,5 @@ class PaperDevRecord:
 
     @property
     def gold_label(self) -> str:
-        """与 pipeline 输出可比的标签：Support / Refute / NEI。"""
+        """Normalized label for pipeline comparison: Support | Refute | NEI."""
         return normalize_label(self.label)

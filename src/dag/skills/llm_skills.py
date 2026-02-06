@@ -1,6 +1,5 @@
 """
-事实核查 pipeline 的 skills：全部接本地 LLM 接口（query_gen、evidence_extract、verify）。
-retrieve 为占位实现（无真实检索 API 时保证 pipeline 可跑），后续可替换为真实检索。
+Fact-checking DAG skills: query_gen, evidence_extract, verify call local LLM; retrieve is a placeholder (replace with real retrieval later).
 """
 
 from __future__ import annotations
@@ -12,12 +11,19 @@ from dag.pipeline import Skill
 
 
 def _get_base_url() -> str:
-    import os
-    return os.environ.get("LLM_BASE_URL", "http://localhost:1025/v1")
+    return __import__("os").environ.get("LLM_BASE_URL", "http://localhost:1025/v1")
+
+
+# -----------------------------------------------------------------------------
+# query_gen: claim -> search query (1 LLM call)
+# -----------------------------------------------------------------------------
 
 
 class _QueryGenSkill:
-    """从 claim 生成检索 query，调本地 LLM。"""
+    """
+    Input:  context with "claim" (str).
+    Output: context updates {"queries": [str], "last_step": "query_gen"}.
+    """
 
     def run(self, context: dict[str, Any]) -> dict[str, Any]:
         claim = context.get("claim", "")
@@ -33,7 +39,10 @@ class _QueryGenSkill:
         return {"queries": [query], "last_step": "query_gen"}
 
 
-# ----- evidence_extract：从 snippets 里抽一句相关证据，或判无相关 -----
+# -----------------------------------------------------------------------------
+# evidence_extract: claim + snippets -> one evidence sentence or NONE (1 LLM call)
+# -----------------------------------------------------------------------------
+
 EVIDENCE_EXTRACT_SYSTEM = """Given a claim and retrieved snippets, output either:
 1) The single sentence that best supports or refutes the claim (copy or shorten from snippets), OR
 2) NONE if no snippet is relevant to the claim.
@@ -42,7 +51,10 @@ Reply with only the evidence sentence or the word NONE. No explanation."""
 
 
 class _EvidenceExtractSkill:
-    """用 LLM 从 snippets 中抽取与 claim 最相关的一句，或判 NONE。"""
+    """
+    Input:  context with "claim", "snippets" (list of str).
+    Output: {"evidence": [{"text": str, "score": float}] or [], "evidence_count": int, "last_step": "evidence_extract"}.
+    """
 
     def run(self, context: dict[str, Any]) -> dict[str, Any]:
         claim = context.get("claim", "")
@@ -71,7 +83,10 @@ class _EvidenceExtractSkill:
         }
 
 
-# ----- verify：单次调用，三分类；明确 Refute 与 NEI 的边界 -----
+# -----------------------------------------------------------------------------
+# verify: claim + evidence -> Support | Refute | NEI (1 LLM call)
+# -----------------------------------------------------------------------------
+
 VERIFY_SYSTEM = """You are a fact-checker. Reply with exactly one word: Support, Refute, or NEI.
 
 Definitions:
@@ -91,7 +106,10 @@ One word: Support, Refute, or NEI?"""
 
 
 class _VerifySkill:
-    """根据 claim + evidence 一次输出 Support/Refute/NEI。"""
+    """
+    Input:  context with "claim", "evidence" (list of dicts with "text").
+    Output: {"label": "Support"|"Refute"|"NEI", "last_step": "verify"}. If evidence is empty, returns label "NEI" without calling LLM.
+    """
 
     def run(self, context: dict[str, Any]) -> dict[str, Any]:
         claim = context.get("claim", "")
@@ -117,8 +135,16 @@ class _VerifySkill:
         return {"label": label, "last_step": "verify"}
 
 
+# -----------------------------------------------------------------------------
+# retrieve: placeholder (no real API); output -> snippets for downstream
+# -----------------------------------------------------------------------------
+
+
 class _RetrieveSkill:
-    """检索：占位实现，返回与 query 对应的占位 snippet。TODO: 接真实检索 API/向量库。"""
+    """
+    Input:  context with "queries" (list of str).
+    Output: {"snippets": [str, ...], "last_step": "retrieve"}. Placeholder: one fake snippet per query; replace with real retrieval API.
+    """
 
     def run(self, context: dict[str, Any]) -> dict[str, Any]:
         queries = context.get("queries", [])
@@ -126,8 +152,16 @@ class _RetrieveSkill:
         return {"snippets": snippets, "last_step": "retrieve"}
 
 
+# -----------------------------------------------------------------------------
+# output: format final string
+# -----------------------------------------------------------------------------
+
+
 class _OutputSkill:
-    """格式化最终输出。"""
+    """
+    Input:  context with "claim", "label".
+    Output: {"output": "Claim: ...\nVerification: ...", "last_step": "output"}.
+    """
 
     def run(self, context: dict[str, Any]) -> dict[str, Any]:
         claim = context.get("claim", "")
@@ -136,7 +170,10 @@ class _OutputSkill:
 
 
 def fact_check_skill_registry() -> dict[str, Skill]:
-    """事实核查 pipeline 的 skill 注册表（全部走本地 LLM，retrieve 为占位）。"""
+    """
+    Input:  none.
+    Output: registry dict skill_id -> Skill for the fact-check DAG (query_gen, retrieve, evidence_extract, verify, output).
+    """
     return {
         "query_gen": _QueryGenSkill(),
         "retrieve": _RetrieveSkill(),
