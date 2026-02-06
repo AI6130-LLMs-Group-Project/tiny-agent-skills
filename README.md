@@ -1,11 +1,28 @@
 # Environment Setup
 
-## Install Dependencies
-This project uses `uv` with Python 3.12.
+## Python + .env
+This project targets Python 3.12. Create `.env` in the project root (copy from `.env.example`).
 
+## Install Dependencies
+Dependencies are unified across `pyproject.toml` and `requirements.txt`.
+
+### uv (recommended)
 ```bash
-uv sync
-uv run python -m dag
+uv sync --all-groups
+uv run python script/run_tests.py
+```
+
+### pip
+```bash
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python -m pip install -e .
+```
+
+Optional dev deps:
+```bash
+python -m pip install pytest hypothesis
 ```
 
 ## Install llama.cpp
@@ -57,6 +74,36 @@ script\download_qwen3vl.bat
 
 REM 3 run the server
 script\run_qwen3vl_server.bat
+```
+
+## Run Tests From Project Root
+These runners assume your local LLM server is running on the expected port.
+
+CLI Test Entry
+```bash
+python script/run_tests.py
+[Additional Flag] --port 1234 (if pointed to empty port, start qwen server) 
+[Additional Flag] --data data/paper_dev.jsonl
+```
+
+React-based method:
+```bash
+python src/react-based-method/scripts/test_cn2.py
+python src/react-based-method/scripts/test_cn3.py
+python src/react-based-method/scripts/test_chinese.py
+python src/react-based-method/run_skill_fever_eval.py --data-dir data --n 20
+```
+
+FSM-based method:
+```bash
+python src/fsm-based-method/fever_runner.py --data data/paper_dev.jsonl --limit 100 --random --seed 234
+python -m uvicorn api:app --app-dir src/fsm-based-method --host 0.0.0.0 --port 8000
+```
+
+DAG pipeline:
+```bash
+PYTHONPATH=src python -m dag --limit 20
+PYTHONPATH=src python -m dag --dataset data/paper_dev.jsonl --limit 20
 ```
 
 # Tiny  Skills

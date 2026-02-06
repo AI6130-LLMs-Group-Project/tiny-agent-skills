@@ -1,7 +1,9 @@
+import os
 import requests
 import json
 
-url = "http://127.0.0.1:1025/v1/chat/completions"
+port = os.environ.get("LLM_PORT", "1025")
+url = f"http://127.0.0.1:{port}/v1/chat/completions"
 
 # 正确构建请求数据，requests库会自动处理UTF-8编码
 payload = {
