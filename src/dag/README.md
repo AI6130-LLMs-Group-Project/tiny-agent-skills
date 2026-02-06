@@ -34,13 +34,13 @@ dag/
 
 ```bash
 # Single example
-PYTHONPATH=src python -m dag
+PYTHONPATH=src python3 -m dag
 
 # Eval on paper_dev (uses dag/data/paper_dev.jsonl)
-PYTHONPATH=src python -m dag --limit 100
+PYTHONPATH=src python3 -m dag --limit 100
 
 # Custom dataset
-PYTHONPATH=src python -m dag --dataset /path/to/file.jsonl --limit 20
+PYTHONPATH=src python3 -m dag --dataset /path/to/file.jsonl --limit 20
 ```
 
 Output includes the current DAG step order (e.g. `query_gen → retrieve → evidence_extract → verify → output`) and, for eval, accuracy, per-class (gold), and prediction distribution.
