@@ -1,6 +1,5 @@
 import json
 import os
-import re
 import sys
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -46,16 +45,12 @@ def _parse_float(s: str) -> float | None:
         return None
 
 
-def _extract_first_number(s: str) -> str:
-    if not s:
-        return ""
-    match = re.search(r"-?\d+(?:\.\d+)?", s.replace(",", ""))
-    return match.group(0) if match else ""
-
-
 def main() -> None:
     os.environ["SKILL_STEP_LOG"] = "1"
-    data = json.load(open('data/ps/gsm8k/gsm8k.json'))[:500]
+    os.environ["SKILL_MAX_HISTORY_STEPS"] = "12"
+    os.environ["SKILL_MAX_HISTORY_CHARS"] = "1800"
+    # data = json.load(open('data/ps/gsm8k/gsm8k.json'))[:500]
+    data = json.load(open('data/ps/gsm8k/gsm8kdouble.json', encoding='utf-8'))
     out_path = 'gsm8k_math_solver_outputs.jsonl'
 
     with open(out_path, 'w', encoding='utf-8') as f:
@@ -80,24 +75,18 @@ def main() -> None:
 
             print(f"Example {i}")
             print(f"  Question: {ex['question']}")
+            print(f"  ExpectedAnswer: {ex['answer']}")
             for step in result["steps"]:
                 _print_step_log(step)
             pred = _extract_answer(result["steps"])
-            pred_num = _extract_first_number(pred)
-            gold_num = _extract_first_number(str(ex["answer"]))
-            pred_f = _parse_float(pred_num)
-            gold_f = _parse_float(gold_num)
+            pred_f = _parse_float(pred)
+            gold_f = _parse_float(str(ex["answer"]))
             is_correct = False
             if pred_f is not None and gold_f is not None:
                 is_correct = abs(pred_f - gold_f) <= 1e-6
             correct += 1 if is_correct else 0
             acc = correct / (i + 1)
-
-            action = f"answer[{pred}]" if pred else "<missing>"
-            expected_display = gold_f if gold_f is not None else ex["answer"]
-            print(f"Action: {action}")
             print(f"  PredictedAnswer: {pred if pred else '<missing>'}")
-            print(f"  ExpectedAnswer: {expected_display}")
             print(f"  Correct: {is_correct}")
             print(f"  Accuracy: {correct}/{i+1} = {acc:.4f}")
             print()

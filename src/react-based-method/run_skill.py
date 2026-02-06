@@ -30,7 +30,7 @@ def load_rules(skill_dir: str) -> Dict[str, str]:
     return rules
 
 
-def http_json(url: str, payload: Optional[dict] = None, timeout: int = 60) -> dict:
+def http_json(url: str, payload: Optional[dict] = None, timeout: int = 300) -> dict:
     if payload is None:
         req = Request(url, method="GET")
     else:
@@ -59,7 +59,7 @@ def chat_completion(base_url: str, model: str, messages: List[dict], tools: Opti
     if tools:
         payload["tools"] = tools
         payload["tool_choice"] = "auto"
-    return http_json(url, payload=payload, timeout=60)
+    return http_json(url, payload=payload, timeout=300)
 
 
 def parse_subskill(text: str, subskills: List[str]) -> str:
@@ -98,14 +98,26 @@ def _trim_history(history: List[dict]) -> List[dict]:
     return history[-max_steps:] if max_steps > 0 else history
 
 
-def build_orchestrator_messages(task: str, history: List[dict], rules: Dict[str, str], subskills: List[str]) -> List[dict]:
+def build_orchestrator_messages(
+    task: str,
+    rules: dict[str, str],
+    subskills: list[str],
+    history: list[dict],
+    max_history_steps: int,
+    max_history_chars: int,
+) -> list[dict]:
     system = (
         "You are the main skill orchestrator. Use ONLY the main skill instructions below. "
-        "Decide which subskill should be applied next. "
+        "Decide which subskill should be applied next.\n"
+        "**[CRITICAL LANGUAGE RULE]**: You MUST reason in the SAME language as the user's input question. "
+        "If the input is in Chinese, ALL your reasoning and output MUST be in Chinese. "
+        "If the input is in English, use English.\n"
+        "**[关键语言规则]**: 你必须使用与用户输入问题相同的语言进行推理。"
+        "如果输入是中文,你的所有推理和输出必须使用中文。如果输入是英文,则使用英文。\n\n"
         f"Output exactly one line in the format: Subskill: <{'|'.join(subskills)}>\n\n"
         + rules["skill"]
     )
-    max_chars = int(os.environ.get("SKILL_MAX_HISTORY_CHARS", "1200"))
+    max_chars = max_history_chars
     user_lines = [f"Input: {task}"]
     trimmed = _trim_history(history)
     if trimmed:
@@ -127,17 +139,50 @@ def build_orchestrator_messages(task: str, history: List[dict], rules: Dict[str,
         {"role": "user", "content": "\n".join(user_lines)},
     ]
 
+def detect_language(text: str) -> str:
+    """检测文本是中文还是英文"""
+    if not text:
+        return "english"
+    chinese_count = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
+    total_chars = len(text)
+    return "chinese" if chinese_count > total_chars * 0.3 else "english"
 
-def build_subskill_messages(task: str, history: List[dict], rules: Dict[str, str], subskill: str) -> List[dict]:
+
+def build_subskill_messages(
+    task: str,
+    rules: dict[str, str],
+    subskill: str,
+    history: list[dict],
+    max_history_steps: int,
+    max_history_chars: int,
+) -> list[dict]:
     rule_text = rules.get(subskill, "")
+    
+    # 检测任务语言
+    task_lang = detect_language(task)
+    lang_name = "Chinese" if task_lang == "chinese" else "English"
+    lang_name_cn = "中文" if task_lang == "chinese" else "英文"
+    
     system = (
-        "You are executing a skill subtask. Follow the subskill instructions. "
-        "If you need a tool, call it. Otherwise, respond with the required output format.\n\n"
+        "You are executing a skill subtask. Follow the subskill instructions below. "
+        "If you need a tool, call it in the correct format. Otherwise respond with the required output format.\n"
+        f"**[DETECTED INPUT LANGUAGE: {lang_name}]**\n"
+        f"**YOU MUST RESPOND ONLY IN {lang_name.upper()}.**\n"
+        f"Do NOT use English if input is Chinese. Do NOT use Chinese if input is English.\n\n"
+        "**[CRITICAL LANGUAGE RULE - TOP PRIORITY]**: You MUST use the SAME language as the user's original question for ALL outputs. "
+        "If it's Chinese, your Thought, Action, and Observation MUST be in Chinese. "
+        "If it's English, use English. This rule overrides everything else.\n"
+        "**[关键语言规则 - 最高优先级]**: 你必须使用与用户原始问题相同的语言输出所有内容。"
+        f"输入语言已检测为: {lang_name_cn}\n"
+        f"**你必须只用{lang_name_cn}回复,不要混合使用两种语言。**\n\n"
         + rules["skill"]
         + ("\n\n" + rule_text if rule_text else "")
     )
-    max_chars = int(os.environ.get("SKILL_MAX_HISTORY_CHARS", "1200"))
-    user_lines = [f"Input: {task}"]
+    max_chars = max_history_chars
+    user_lines = [
+        f"**IMPORTANT: Input language is {lang_name}. You MUST respond in {lang_name} ONLY.**\n",
+        f"Input: {task}"
+    ]
     trimmed = _trim_history(history)
     if trimmed:
         user_lines.append("History:")
@@ -152,6 +197,7 @@ def build_subskill_messages(task: str, history: List[dict], rules: Dict[str, str
                 user_lines.append(f"ToolCall: {_truncate_text(str(h['tool_call']), max_chars)}")
             if h.get("tool_result"):
                 user_lines.append(f"ToolResult: {_truncate_text(str(h['tool_result']), max_chars)}")
+    user_lines.append(f"**Remember: Respond ONLY in {lang_name}. Do NOT switch languages.**")
     user_lines.append("Provide the next output.")
     return [
         {"role": "system", "content": system},
@@ -182,6 +228,10 @@ def run_skill(
     subskills = [k for k in rules.keys() if k != "skill"]
     history: List[Dict[str, Any]] = []
     log_steps = os.environ.get("SKILL_STEP_LOG") == "1"
+    
+    # 添加这两行获取环境变量
+    max_history_steps = int(os.environ.get("SKILL_MAX_HISTORY_STEPS", "12"))
+    max_history_chars = int(os.environ.get("SKILL_MAX_HISTORY_CHARS", "1800"))
 
     if tools_registry and hasattr(tools_registry, "reset"):
         try:
@@ -190,12 +240,18 @@ def run_skill(
             pass
 
     for step in range(max_steps):
-        orch_messages = build_orchestrator_messages(task, history, rules, subskills)
+        # 修正这一行，添加缺少的参数
+        orch_messages = build_orchestrator_messages(
+            task, rules, subskills, history, max_history_steps, max_history_chars
+        )
         orch_resp = chat_completion(base_url, model, orch_messages)
         orch_output = extract_assistant_content(orch_resp)
         subskill = parse_subskill(orch_output, subskills)
 
-        sub_messages = build_subskill_messages(task, history, rules, subskill)
+        # 修正这一行，添加缺少的参数
+        sub_messages = build_subskill_messages(
+            task, rules, subskill, history, max_history_steps, max_history_chars
+        )
         tool_defs = tools_registry.openai_tools() if tools_registry else None
         sub_resp = chat_completion(base_url, model, sub_messages, tools=tool_defs)
         sub_output = extract_assistant_content(sub_resp)
