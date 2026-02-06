@@ -9,7 +9,7 @@ dag/
 ├── __main__.py       # Entry: python -m dag [--dataset path] [--limit N]
 ├── pipeline.py       # PipelineConfig, StepDef, PipelineRunner (DAG orchestration)
 ├── llm_client.py     # Local LLM client (OpenAI-compatible /v1/chat/completions)
-├── data/
+├── ../../data/       # Project root
 │   ├── paper_dev.py  # paper_dev.jsonl loader
 │   └── paper_dev.jsonl
 ├── skills/

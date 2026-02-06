@@ -63,7 +63,7 @@ def _extract_evidence(state: AgentState, limit: int = 3) -> str:
 # Main entry point: run on FEVER JSONL with given flags passing in args
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run FSM fact-verification pipeline on FEVER JSONL.")
-    parser.add_argument("--data", default="data/paper_dev.jsonl", help="Path to FEVER JSONL file.")
+    parser.add_argument("--data", default="../../data/paper_dev.jsonl", help="Path to FEVER JSONL file.")
     parser.add_argument("--limit", type=int, default=20, help="Max rows to evaluate.")
     parser.add_argument("--start", type=int, default=0, help="Start row offset.")
     parser.add_argument("--random", action="store_true", help="Sample records randomly instead of sequential order.")

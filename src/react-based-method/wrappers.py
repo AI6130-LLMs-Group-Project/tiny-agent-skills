@@ -1,13 +1,17 @@
 import json
 import os
+from pathlib import Path
 
 
 class FeverWrapper:
     def __init__(self, env, split="dev", data_dir=None):
         self.env = env
         self.split = split
-        self.data_dir = data_dir or os.environ.get("FEVER_DATA_DIR") or os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "data"
+        project_root = Path(__file__).resolve().parents[2]
+        self.data_dir = (
+            data_dir
+            or os.environ.get("FEVER_DATA_DIR")
+            or os.path.join(project_root, "data")
         )
         self.data = self._load_split(split)
         self.current = None
