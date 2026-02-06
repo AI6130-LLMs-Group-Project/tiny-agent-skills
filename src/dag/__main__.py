@@ -3,7 +3,7 @@ DAG pipeline CLI. Start local LLM first: bash script/run_qwen3vl_server.sh.
 
 Usage:
   python -m dag                    # single example run
-  python -m dag --limit N         # eval on dag/data/paper_dev.jsonl, max N samples
+  python -m dag --limit N         # eval on <project root>/data/paper_dev.jsonl, max N samples
   python -m dag --dataset path.jsonl [--limit N]
 """
 
@@ -19,7 +19,7 @@ from dag.skills import fact_check_skill_registry
 def main() -> None:
     """CLI entry: parse --dataset, --limit; run single example or dataset eval."""
     root = Path(__file__).resolve().parent.parent.parent
-    default_dataset = Path(__file__).resolve().parent / "data" / "paper_dev.jsonl"
+    default_dataset = root / "data" / "paper_dev.jsonl"
     dataset_path = default_dataset
     limit = None
     args = sys.argv[1:]
