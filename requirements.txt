@@ -1,5 +1,11 @@
-requests
-pyyaml
+accelerate
 fastapi
-uvicorn
+huggingface-hub[cli]
+instructor
+llama-cpp-python
 pydantic
+pyyaml
+requests
+transformers
+typer
+uvicorn

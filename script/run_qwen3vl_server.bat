@@ -11,6 +11,8 @@ set LLAMA_SERVER=%PROJECT_ROOT%\runtime\llama-cpp\build\bin\llama-server.exe
 set MODEL_DIR=%PROJECT_ROOT%\runtime\models\Qwen3vl-2B
 set MODEL=%MODEL_DIR%\Qwen3VL-2B-Instruct-Q8_0.gguf
 set MMPROJ=%MODEL_DIR%\mmproj-Qwen3VL-2B-Instruct-F16.gguf
+set PORT=%~1
+if "%PORT%"=="" set PORT=1025
 
 if not exist "%LLAMA_SERVER%" (
   echo Error: llama-server not found at %LLAMA_SERVER%
@@ -31,11 +33,13 @@ echo Starting llama-server with Qwen3VL-2B-Instruct...
 echo Model: %MODEL%
 echo MMProj: %MMPROJ%
 
+echo Port: %PORT%
+
 "%LLAMA_SERVER%" ^
   -m "%MODEL%" ^
   --mmproj "%MMPROJ%" ^
   -c 4096 ^
   -ngl 999 ^
-  --port 1025
+  --port %PORT%
 
 endlocal

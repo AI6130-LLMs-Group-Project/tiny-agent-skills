@@ -12,6 +12,20 @@ from urllib.error import HTTPError
 from tool_registry import ToolRegistry, parse_tool_args
 
 
+def resolve_skill_dir(skill_dir: str) -> str:
+    if os.path.isabs(skill_dir):
+        return skill_dir
+    candidates = [os.path.join(os.getcwd(), skill_dir)]
+    base = os.path.abspath(os.path.dirname(__file__))
+    candidates.append(os.path.join(base, skill_dir))
+    if os.path.sep not in skill_dir and "/" not in skill_dir:
+        candidates.append(os.path.join(base, "skills", skill_dir))
+    for path in candidates:
+        if os.path.isdir(path):
+            return path
+    return candidates[0]
+
+
 def read_text(path: str) -> str:
     with open(path, "r", encoding="utf-8") as f:
         return f.read().strip()
@@ -224,6 +238,7 @@ def run_skill(
     stop_subskill: str = "finish",
     stop_on_answer: bool = True,
 ) -> dict:
+    skill_dir = resolve_skill_dir(skill_dir)
     rules = load_rules(skill_dir)
     subskills = [k for k in rules.keys() if k != "skill"]
     history: List[Dict[str, Any]] = []
@@ -326,9 +341,7 @@ def main() -> int:
     parser.add_argument("--json", default="", help="Write JSON log to file (default: stdout)")
     args = parser.parse_args()
 
-    skill_dir = args.skill
-    if not os.path.isabs(skill_dir):
-        skill_dir = os.path.join(os.getcwd(), skill_dir)
+    skill_dir = resolve_skill_dir(args.skill)
 
     tools_registry = load_tools_module(args.tools)
 
