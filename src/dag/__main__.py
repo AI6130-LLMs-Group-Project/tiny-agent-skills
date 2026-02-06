@@ -1,3 +1,12 @@
+"""
+DAG pipeline CLI. Start local LLM first: bash script/run_qwen3vl_server.sh.
+
+Usage:
+  python -m dag                    # single example run
+  python -m dag --limit N         # eval on dag/data/paper_dev.jsonl, max N samples
+  python -m dag --dataset path.jsonl [--limit N]
+"""
+
 import sys
 from pathlib import Path
 
@@ -8,9 +17,8 @@ from dag.skills import fact_check_skill_registry
 
 
 def main() -> None:
-    """Entry point for the DAG pipeline CLI. 需先启动本地 LLM：bash script/run_qwen3vl_server.sh"""
+    """CLI entry: parse --dataset, --limit; run single example or dataset eval."""
     root = Path(__file__).resolve().parent.parent.parent
-    # 本框架数据独立放在 src/dag/data/
     default_dataset = Path(__file__).resolve().parent / "data" / "paper_dev.jsonl"
     dataset_path = default_dataset
     limit = None
@@ -30,7 +38,12 @@ def main() -> None:
 
 
 def run_fact_check_example(root: Path) -> None:
-    """加载 fact_check.yaml，跑一遍 Pipeline（本地 LLM）。"""
+    """
+    Load fact_check.yaml, run pipeline once with a fixed claim.
+
+    Input:  root — project root (for config path).
+    Output: prints "Pipeline (DAG): ..." and "Pipeline result: ..." to stdout.
+    """
     config_path = root / "config" / "pipelines" / "fact_check.yaml"
     if not config_path.exists():
         print("Skip: config/pipelines/fact_check.yaml not found")
@@ -47,7 +60,16 @@ def run_fact_check_example(root: Path) -> None:
 def run_pipeline_on_dataset(
     dataset_path: Path, limit: int | None = None, root: Path | None = None
 ) -> None:
-    """对 paper_dev.jsonl 逐条跑 Pipeline，打印准确率。config 用项目根目录。"""
+    """
+    Run pipeline on each record in paper_dev.jsonl; print accuracy and per-class stats.
+
+    Input:
+      dataset_path — path to .jsonl file.
+      limit        — optional max samples.
+      root         — project root for config (default: inferred from __file__).
+
+    Output: prints Accuracy, Per-class (gold), Prediction distribution to stdout.
+    """
     from dag.data import load_paper_dev
 
     root = root or Path(__file__).resolve().parent.parent.parent

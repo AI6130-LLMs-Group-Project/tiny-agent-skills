@@ -1,58 +1,58 @@
-# DAG（Pipeline）框架
+# DAG (Pipeline) Framework
 
-基于**有向无环图**的事实核查 pipeline：由配置决定步骤顺序，每步一个 skill，小模型只在节点内调用本地 LLM，不做「选哪个 skill」的推理。
+Fact-checking pipeline driven by a **directed acyclic graph**: step order is defined in config; each node is one skill; the small model is only called inside nodes (no LLM choosing "which skill next").
 
-## 结构
+## Layout
 
 ```
 dag/
-├── __main__.py      # 入口：python -m dag [--dataset ...] [--limit N]
-├── pipeline.py      # PipelineConfig / StepDef / PipelineRunner（DAG 编排）
-├── llm_client.py    # 本地 LLM 调用（OpenAI 兼容 /v1/chat/completions）
+├── __main__.py       # Entry: python -m dag [--dataset path] [--limit N]
+├── pipeline.py       # PipelineConfig, StepDef, PipelineRunner (DAG orchestration)
+├── llm_client.py     # Local LLM client (OpenAI-compatible /v1/chat/completions)
 ├── data/
-│   ├── paper_dev.py # paper_dev.jsonl 加载器
+│   ├── paper_dev.py  # paper_dev.jsonl loader
 │   └── paper_dev.jsonl
 ├── skills/
-│   └── llm_skills.py  # query_gen / retrieve / evidence_extract / verify / output
+│   └── llm_skills.py # query_gen, retrieve, evidence_extract, verify, output
 └── README.md
 ```
 
-- **编排**：`config/pipelines/fact_check.yaml` 定义步骤顺序（DAG）。
-- **数据**：本框架数据在 `src/dag/data/`，与 FSM、ReAct 各自独立。
+- **Orchestration**: `config/pipelines/fact_check.yaml` defines the DAG (step order and optional `goto_if`).
+- **Data**: This framework’s data lives under `src/dag/data/`, independent of FSM and ReAct.
 
-## 运行前
+## Before running
 
-1. 启动本地 LLM（例如 Qwen3-VL）：
+1. Start the local LLM (e.g. Qwen3-VL):
    ```bash
    bash script/run_qwen3vl_server.sh
    ```
-   默认端口 1025；若不同可设 `LLM_BASE_URL=http://localhost:端口/v1`。
+   Default port is 1025. To use another port, set `LLM_BASE_URL=http://localhost:PORT/v1`.
 
-2. 在项目根目录执行（需把 `src` 加入 Python 路径）：
+2. Run from the project root with `src` on `PYTHONPATH`.
 
-## 运行
+## Commands
 
 ```bash
-# 单条示例
+# Single example
 PYTHONPATH=src python -m dag
 
-# 在 paper_dev 上评测（使用本框架 data/paper_dev.jsonl）
+# Eval on paper_dev (uses dag/data/paper_dev.jsonl)
 PYTHONPATH=src python -m dag --limit 100
 
-# 指定数据集路径
+# Custom dataset
 PYTHONPATH=src python -m dag --dataset /path/to/file.jsonl --limit 20
 ```
 
-输出会打印当前 DAG 步骤顺序（如 `query_gen → retrieve → evidence_extract → verify → output`）以及准确率、Per-class、预测分布。
+Output includes the current DAG step order (e.g. `query_gen → retrieve → evidence_extract → verify → output`) and, for eval, accuracy, per-class (gold), and prediction distribution.
 
-## Skills
+## Skills (input → output)
 
-| skill_id        | 说明                     | LLM |
-|-----------------|--------------------------|-----|
-| query_gen       | 从 claim 生成检索 query  | ✓   |
-| retrieve        | 检索（当前为占位，可接真实检索） | ✗   |
-| evidence_extract| 从 snippets 抽一句或 NONE | ✓   |
-| verify          | Support / Refute / NEI   | ✓   |
-| output          | 格式化输出               | ✗   |
+| skill_id         | Input (from context)     | Output (merged into context)                    | LLM |
+|------------------|---------------------------|--------------------------------------------------|-----|
+| query_gen        | `claim`                   | `queries`, `last_step`                           | ✓   |
+| retrieve         | `queries`                 | `snippets`, `last_step` (placeholder)            | ✗   |
+| evidence_extract | `claim`, `snippets`       | `evidence`, `evidence_count`, `last_step`        | ✓   |
+| verify           | `claim`, `evidence`       | `label` (Support\|Refute\|NEI), `last_step`      | ✓   |
+| output           | `claim`, `label`          | `output`, `last_step`                            | ✗   |
 
-每条样本默认 3 次 LLM 调用：query_gen、evidence_extract、verify。
+Per sample there are **3 LLM calls**: query_gen, evidence_extract, verify.
