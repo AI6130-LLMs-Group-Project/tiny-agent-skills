@@ -1,5 +1,5 @@
 [project]
-name = "agent"
+name = "dag"
 version = "0.1.0"
 description = ""
 authors = [{ name = "NTU 2026 Spring AI6130 Group 1" }]

@@ -5,7 +5,7 @@ This project uses `uv` with Python 3.12.
 
 ```bash
 uv sync
-uv run python -m agent hello
+uv run python -m dag
 ```
 
 ## Install llama.cpp

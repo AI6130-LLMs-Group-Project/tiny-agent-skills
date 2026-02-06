@@ -1,0 +1,17 @@
+# fact-verification Pipeline demo
+# Claim -> query generation -> retrieval -> evidence extraction -> REL -> output
+# optional loop: REL - if evidence not sufficient, back to step 1
+
+name: fact_check
+max_steps: 50
+
+steps:
+  - skill: query_gen
+  - skill: retrieve
+  - skill: evidence_extract
+  - skill: verify
+    # If evidence_count < 1, back to retrival stage once more
+    goto_if:
+      condition: "evidence_count < 1"
+      step: 1
+  - skill: output
