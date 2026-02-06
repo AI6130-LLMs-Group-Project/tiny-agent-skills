@@ -1,6 +1,6 @@
-# 事实核查 Pipeline 示例
-# 对应文档中的: Claim -> Query 生成 -> 检索 -> 证据抽取 -> REL 判定 -> 输出
-# 可选环：REL 判定时若证据不足，回到检索（step 1）
+# fact-verification Pipeline demo
+# Claim -> query generation -> retrieval -> evidence extraction -> REL -> output
+# optional loop: REL - if evidence not sufficient, back to step 1
 
 name: fact_check
 max_steps: 50
@@ -10,7 +10,7 @@ steps:
   - skill: retrieve
   - skill: evidence_extract
   - skill: verify
-    # 若 evidence_count < 1，回到第 1 步（retrieve）再检一轮；>=1 则继续到 output
+    # If evidence_count < 1, back to retrival stage once more
     goto_if:
       condition: "evidence_count < 1"
       step: 1
