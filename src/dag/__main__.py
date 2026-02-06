@@ -3,26 +3,28 @@ from pathlib import Path
 
 import yaml
 
-from agent.pipeline import PipelineConfig, PipelineRunner, load_pipeline_config_from_yaml
-from agent.skills import fact_check_skill_registry
+from dag.pipeline import PipelineConfig, PipelineRunner, load_pipeline_config_from_yaml
+from dag.skills import fact_check_skill_registry
 
 
 def main() -> None:
-    """Entry point for the agent CLI. 需先启动本地 LLM：bash script/run_qwen3vl_server.sh"""
+    """Entry point for the DAG pipeline CLI. 需先启动本地 LLM：bash script/run_qwen3vl_server.sh"""
     root = Path(__file__).resolve().parent.parent.parent
-    dataset_path = root / "paper_dev.jsonl"
+    # 本框架数据独立放在 src/dag/data/
+    default_dataset = Path(__file__).resolve().parent / "data" / "paper_dev.jsonl"
+    dataset_path = default_dataset
     limit = None
     args = sys.argv[1:]
     if "--dataset" in args:
         i = args.index("--dataset")
-        dataset_path = Path(args[i + 1]) if i + 1 < len(args) else dataset_path
+        dataset_path = Path(args[i + 1]) if i + 1 < len(args) else default_dataset
     if "--limit" in args:
         i = args.index("--limit")
         if i + 1 < len(args):
             limit = int(args[i + 1])
 
-    if "--dataset" in sys.argv and dataset_path.exists():
-        run_pipeline_on_dataset(dataset_path, limit=limit)
+    if ("--dataset" in sys.argv or "--limit" in sys.argv) and dataset_path.exists():
+        run_pipeline_on_dataset(dataset_path, limit=limit, root=root)
     else:
         run_fact_check_example(root)
 
@@ -42,13 +44,16 @@ def run_fact_check_example(root: Path) -> None:
     print("Pipeline result:", result.get("output", result))
 
 
-def run_pipeline_on_dataset(dataset_path: Path, limit: int | None = None) -> None:
-    """对 paper_dev.jsonl 逐条跑 Pipeline，打印准确率。"""
-    from agent.data import load_paper_dev
+def run_pipeline_on_dataset(
+    dataset_path: Path, limit: int | None = None, root: Path | None = None
+) -> None:
+    """对 paper_dev.jsonl 逐条跑 Pipeline，打印准确率。config 用项目根目录。"""
+    from dag.data import load_paper_dev
 
-    config_path = dataset_path.parent / "config" / "pipelines" / "fact_check.yaml"
+    root = root or Path(__file__).resolve().parent.parent.parent
+    config_path = root / "config" / "pipelines" / "fact_check.yaml"
     if not config_path.exists():
-        from agent.pipeline import PipelineConfig, StepDef
+        from dag.pipeline import PipelineConfig, StepDef
         config = PipelineConfig(steps=[
             StepDef("query_gen"),
             StepDef("retrieve"),
