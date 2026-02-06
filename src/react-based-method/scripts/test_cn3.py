@@ -7,6 +7,8 @@ from run_skill import run_skill
 
 os.environ["SKILL_STEP_LOG"] = "1"
 
+base_url = "http://127.0.0.1:1025"
+
 # 测试用例列表
 test_cases = [
     {
@@ -47,7 +49,7 @@ def run_test(test_case):
     result = run_skill(
         task=test_case['claim'],
         skill_dir='skills/fever',
-        base_url='http://127.0.0.1:1234',
+        base_url=base_url,
         model='local-model',
         max_steps=10,
         stop_subskill="finish",

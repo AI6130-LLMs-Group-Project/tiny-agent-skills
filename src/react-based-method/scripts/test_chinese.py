@@ -1,7 +1,7 @@
 import requests
 import json
 
-url = "http://127.0.0.1:1234/v1/chat/completions"
+url = "http://127.0.0.1:1025/v1/chat/completions"
 
 # 正确构建请求数据，requests库会自动处理UTF-8编码
 payload = {
