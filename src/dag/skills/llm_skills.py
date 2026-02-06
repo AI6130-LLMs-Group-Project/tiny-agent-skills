@@ -7,8 +7,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from agent.llm_client import chat
-from agent.pipeline import Skill
+from dag.llm_client import chat
+from dag.pipeline import Skill
 
 
 def _get_base_url() -> str:
