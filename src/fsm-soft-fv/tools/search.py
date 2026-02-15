@@ -1,5 +1,3 @@
-### This tool performs a search query on Wiki/ddg tips
-
 import json
 import os
 import re
@@ -176,8 +174,3 @@ def run(args):
         return out
     except Exception as exc:
         return _err("FETCH_FAIL", str(exc))
-
-# Quick test lah
-if __name__ == "__main__":
-    sample = {"q": "Apollo 11 1969", "lim": 3, "src": "wiki"}
-    print(json.dumps(run(sample), ensure_ascii=True))

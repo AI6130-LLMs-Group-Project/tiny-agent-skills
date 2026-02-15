@@ -1,5 +1,3 @@
-### This tool performs a web search using SerpAPI or Tavily API (better within free tier)
-
 import json
 import os
 import time
@@ -165,9 +163,3 @@ def run(args):
         return out
     except Exception as exc:
         return _err("FETCH_FAIL", str(exc))
-
-
-# Quick test lah
-if __name__ == "__main__":
-    sample = {"q": "Apollo 11 1969", "lim": 3}
-    print(json.dumps(run(sample), ensure_ascii=True))

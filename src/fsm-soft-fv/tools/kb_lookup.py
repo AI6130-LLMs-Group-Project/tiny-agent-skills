@@ -1,5 +1,3 @@
-### Might be useless, but my engineering brain says to keep it!
-
 import json
 import os
 from pathlib import Path
@@ -108,9 +106,3 @@ def run(args):
         )
 
     return _ok(out)
-
-
-# Quick test lah
-if __name__ == "__main__":
-    sample = {"q": "Apollo 11 1969", "lim": 3}
-    print(json.dumps(run(sample), ensure_ascii=True))

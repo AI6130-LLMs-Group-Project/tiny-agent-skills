@@ -30,6 +30,7 @@ def _decide(group):
     n_count = sum(1 for x in group if x.get("st") == "neutral")
 
     # Conservative: support must clearly dominate; contradiction has priority.
+    # as this method is kinda eliminated, probably these parameters won't be tuned much...
     r_min = _env_float("DECIDE_REFUTE_MIN", 1.5)
     r_margin = _env_float("DECIDE_REFUTE_MARGIN", 0.5)
     r_high = _env_float("DECIDE_REFUTE_HIGH", 2.5)

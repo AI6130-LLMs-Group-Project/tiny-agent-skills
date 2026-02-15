@@ -208,6 +208,7 @@ def _env_int(name, default):
 
 def _score_pair(claim, sent):
     _load_runtime_env()
+    # as this method is kinda eliminated, probably these parameters won't be tuned much...
     neutral_ratio = _env_float("NLI_NEUTRAL_RATIO", 0.15)
     neutral_overlap = _env_int("NLI_NEUTRAL_OVERLAP", 1)
     neg_refute_ratio = _env_float("NLI_NEG_REFUTE_RATIO", 0.25)

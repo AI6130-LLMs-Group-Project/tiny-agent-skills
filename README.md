@@ -94,10 +94,15 @@ python src/react-based-method/scripts/test_chinese.py
 python src/react-based-method/run_skill_fever_eval.py --data-dir data --n 20
 ```
 
-FSM-based method:
+FSM-based method: \
+Hard FSM:
 ```bash
-python src/fsm-based-method/fever_runner.py --data data/paper_dev.jsonl --limit 100 --random --seed 234
+python src/fsm-hard-fv/fever_runner.py --data data/paper_dev.jsonl --limit 100 --random --seed 234 --show-trace
 python -m uvicorn api:app --app-dir src/fsm-based-method --host 0.0.0.0 --port 8000
+``` 
+Soft FSM:
+```bash
+python src/fsm-soft-fv/fever_runner.py --data data/paper_dev.jsonl --limit 100 --random --seed 345 --show-trace
 ```
 
 DAG pipeline:

@@ -1,5 +1,3 @@
-### This tool fetches a web page and returns its content up to a specified context limit
-
 import json
 import re
 import urllib.request
@@ -58,9 +56,3 @@ def run(args):
         return _ok({"url": url, "status": status, "content_type": content_type, "text": text})
     except Exception as exc:
         return _err("FETCH_FAIL", str(exc))
-
-
-# Quick test lah
-if __name__ == "__main__":
-    sample = {"url": "https://en.wikipedia.org/wiki/Apollo_11", "max_bytes": 20000, "timeout": 10}
-    print(json.dumps(run(sample), ensure_ascii=True))
