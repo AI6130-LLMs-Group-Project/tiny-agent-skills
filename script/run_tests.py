@@ -64,7 +64,7 @@ def _uv_available() -> bool:
 
 def _pip_available() -> bool:
     try:
-        import pip  # noqa: F401
+        import pip
         return True
     except Exception:
         return False
@@ -192,10 +192,14 @@ def main() -> int:
         else py_path + os.pathsep + env["PYTHONPATH"]
     )
 
+    # Define the test options here
     options = [
-        ("ReAct", "react"),
-        ("DAG", "dag"),
-        ("FSM", "fsm"),
+        ("ReAct - FV", "react-fv"),
+        ("DAG - FV", "dag-fv"),
+        ("FSM-Hard - FV", "fsm-hard-fv"),
+        ("FSM-Soft - FV", "fsm-soft-fv"),
+        ("Baseline - FV", "baseline-fv"),
+        ("Baseline - Math", "baseline-math"),
         ("Chinese test 1 (math solver)", "cn2"),
         ("Chinese test 2 (fact verification)", "cn3"),
         ("Chinese test 3 (chat)", "cn_chat"),
@@ -203,7 +207,8 @@ def main() -> int:
     choice = _select_menu([o[0] for o in options])
     selected = options[choice][1]
 
-    if selected == "react":
+    # Now please append the test commands to elifs for any newly registered test options
+    if selected == "react-fv":
         split = _react_split_from_path(dataset_path)
         if split is None:
             print("ReAct runner supports paper_dev.jsonl, paper_test.jsonl, or train.jsonl only.")
@@ -213,7 +218,7 @@ def main() -> int:
             *python_cmd,
             "src/react-based-method/run_skill_fever_eval.py",
             "--n",
-            "20",
+            "100",
             "--split",
             split,
             "--data-dir",
@@ -221,7 +226,7 @@ def main() -> int:
             "--base-url",
             f"http://127.0.0.1:{port}",
         ]
-    elif selected == "dag":
+    elif selected == "dag-fv":
         cmd = [
             *python_cmd,
             "-m",
@@ -229,16 +234,45 @@ def main() -> int:
             "--dataset",
             str(dataset_path),
             "--limit",
-            "20",
+            "100",
         ]
-    elif selected == "fsm":
+    elif selected == "fsm-hard-fv":
         cmd = [
             *python_cmd,
-            "src/fsm-based-method/fever_runner.py",
+            "src/fsm-hard-fv/fever_runner.py",
             "--data",
             str(dataset_path),
             "--limit",
-            "20",
+            "100",
+        ]
+    elif selected == "fsm-soft-fv":
+        cmd = [
+            *python_cmd,
+            "src/fsm-soft-fv/fever_runner.py",
+            "--data",
+            str(dataset_path),
+            "--limit",
+            "100",
+        ]
+    elif selected == "baseline-fv":
+        cmd = [
+            *python_cmd,
+            "src/baseline/fever_baseline.py",
+            "--data",
+            str(dataset_path),
+            "--limit",
+            "100",
+        ]
+    elif selected == "baseline-math":
+        cmd = [
+            *python_cmd,
+            "src/baseline/gsm8k_baseline.py",
+            "--data",
+            "data/ps/gsm8k/gsm8k.json",
+            "--limit",
+            "100",
+            "--max-tool-calls",
+            "3",
         ]
     elif selected == "cn2":
         cmd = [*python_cmd, "src/react-based-method/scripts/test_cn2.py"]

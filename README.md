@@ -86,6 +86,14 @@ python script/run_tests.py
 [Additional Flag] --data data/paper_dev.jsonl
 ```
 
+Baselines (vanilla prompt + tool calling):
+```bash
+# Fact Verification Baseline with prompt + tool calling at wiki search
+python src/baseline/fever_baseline.py --data data/paper_dev.jsonl --port 1025 --limit 5
+# Math Baseline with prompt + tool calling from math utils
+python src/baseline/gsm8k_baseline.py --limit 20 --max-tool-calls 3 --seed 42 --port 1025
+```
+
 React-based method:
 ```bash
 python src/react-based-method/scripts/test_cn2.py
