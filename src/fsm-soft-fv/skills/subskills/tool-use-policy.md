@@ -1,8 +1,14 @@
-## Tool Use Policy
+# Tool Use Policy Subskill
 
-Rules:
-1. Use tools only for retrieval or source text access.
-2. Do not use tools for claim parsing, evidence ranking, NLI, verdict aggregation, or response writing.
-3. At most one tool call per turn.
-4. If a retrieval tool fails, retry with adjusted args or a different retrieval tool.
-5. Keep expensive retrieval (`web_search`) as fallback after cheaper options.
+## Allowed Tool Scope by State
+- `PARSE_CLAIM`: no tool (LLM reasoning)
+- `RETRIEVAL`: `search`, `kb_lookup`, `web_search`, `page_fetch`, `sentence_extract`
+- `SELECT_EVIDENCE`: no tool (LLM reasoning)
+- `NLI_VERIFY`: no tool (LLM reasoning)
+- `DECIDE`: no tool (LLM reasoning)
+- `OUTPUT`: no tool (LLM reasoning)
+
+## Policy
+1. Use tools only to collect evidence candidates.
+2. Do not use tools to decide stance/verdict.
+3. If planner output violates scope, ignore it and use orchestrator defaults.

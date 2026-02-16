@@ -1,11 +1,5 @@
-## NLI Verify State
+# NLI Verify Subskill
 
-Goal:
-- decide support/refute/neutral per selected evidence-claim pair
-
-Do this with LLM reasoning in `write.scores`.
-Be conservative on weak or mismatched evidence.
-
-Exit condition:
-- `scores` non-empty -> `DECIDE`
-- otherwise retry or go back to `RETRIEVAL`
+1. Pair each selected evidence row with its claim.
+2. Compute stance (`support`, `refute`, `neutral`) with conservative heuristics.
+3. Output score list with confidence values.

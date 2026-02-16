@@ -37,6 +37,18 @@ def _ok(results):
     return {"s": "ok", "d": {"results": results}, "e": None}
 
 
+def _http_timeout():
+    try:
+        val = int(os.getenv("RETRIEVAL_HTTP_TIMEOUT", "4"))
+    except Exception:
+        val = 4
+    if val < 1:
+        return 1
+    if val > 15:
+        return 15
+    return val
+
+
 def _append_evidence(results):
     kb_path = os.getenv("KB_PATH")
     root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -63,7 +75,7 @@ def _serpapi_search(q, lim, key):
     params = {"q": q, "api_key": key, "num": lim}
     url = "https://serpapi.com/search.json?" + urllib.parse.urlencode(params)
     req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req, timeout=10) as resp:
+    with urllib.request.urlopen(req, timeout=_http_timeout()) as resp:
         data = json.loads(resp.read().decode("utf-8"))
     items = []
     for i, v in enumerate(data.get("organic_results", []), start=1):
@@ -93,7 +105,7 @@ def _tavily_search(q, lim, key):
         },
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=10) as resp:
+    with urllib.request.urlopen(req, timeout=_http_timeout()) as resp:
         data = json.loads(resp.read().decode("utf-8"))
     items = []
     for i, v in enumerate(data.get("results", []), start=1):

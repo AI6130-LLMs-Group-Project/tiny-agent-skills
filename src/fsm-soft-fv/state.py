@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 
 
 def load_env() -> None:
+    """Load .env once so local runs behave nicely on laptops and labs."""
     if getattr(load_env, "_loaded", False):
         return
     root = Path(__file__).resolve().parents[2]
@@ -18,11 +19,11 @@ def load_env() -> None:
                 line = line.strip()
                 if not line or line.startswith("#") or "=" not in line:
                     continue
-                k, v = line.split("=", 1)
-                k = k.strip()
-                v = v.strip().strip("'").strip('"')
-                if k and k not in os.environ:
-                    os.environ[k] = v
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip().strip("'").strip('"')
+                if key and key not in os.environ:
+                    os.environ[key] = value
     load_env._loaded = True
 
 
@@ -48,7 +49,7 @@ class ActionRecord:
 @dataclass
 class AgentState:
     sid: str
-    fsm: str = "PARSE_CLAIM"
+    fsm: str
     rev: int = 0
     claim: Optional[str] = None
     norm_claim: Optional[str] = None
@@ -80,11 +81,11 @@ class AgentState:
     def add_evidence(self, items: List[EvidenceItem]) -> None:
         self.evidence.extend(items)
 
-    def snapshot(self) -> Dict[str, Any]:
+    def to_dict(self) -> Dict[str, Any]:
         return {
             "sid": self.sid,
-            "rev": self.rev,
             "fsm": self.fsm,
+            "rev": self.rev,
             "claim": self.claim,
             "norm_claim": self.norm_claim,
             "claims": self.claims,
@@ -95,4 +96,5 @@ class AgentState:
             "scores": self.scores,
             "verdicts": self.verdicts,
             "output": self.output,
+            "history": [h.__dict__ for h in self.history],
         }

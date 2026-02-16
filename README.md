@@ -102,7 +102,9 @@ python -m uvicorn api:app --app-dir src/fsm-based-method --host 0.0.0.0 --port 8
 ``` 
 Soft FSM:
 ```bash
-python src/fsm-soft-fv/fever_runner.py --data data/paper_dev.jsonl --limit 100 --random --seed 345 --show-trace
+python src/fsm-soft-fv/fever_runner.py --data data/paper_dev.jsonl --limit 100 --random --seed 345
+# live stage-by-stage logs (enabled by default, disable with --no-live-steps)
+python src/fsm-soft-fv/fever_runner.py --data data/paper_dev.jsonl --limit 20 --live-steps
 ```
 
 DAG pipeline:

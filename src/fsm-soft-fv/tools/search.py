@@ -68,6 +68,18 @@ def _clean(text):
     return " ".join(text.split())
 
 
+def _http_timeout():
+    try:
+        val = int(os.getenv("RETRIEVAL_HTTP_TIMEOUT", "4"))
+    except Exception:
+        val = 4
+    if val < 1:
+        return 1
+    if val > 15:
+        return 15
+    return val
+
+
 def _wiki_search(q, lim):
     params = {
         "action": "query",
@@ -79,7 +91,7 @@ def _wiki_search(q, lim):
     }
     url = "https://en.wikipedia.org/w/api.php?" + urllib.parse.urlencode(params)
     req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req, timeout=10) as resp:
+    with urllib.request.urlopen(req, timeout=_http_timeout()) as resp:
         data = json.loads(resp.read().decode("utf-8"))
     items = []
     for i, hit in enumerate(data.get("query", {}).get("search", []), start=1):
@@ -108,7 +120,7 @@ def _duckduckgo_search(q, lim, src):
     }
     url = "https://api.duckduckgo.com/?" + urllib.parse.urlencode(params)
     req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req, timeout=10) as resp:
+    with urllib.request.urlopen(req, timeout=_http_timeout()) as resp:
         data = json.loads(resp.read().decode("utf-8"))
     items = []
     pool = []

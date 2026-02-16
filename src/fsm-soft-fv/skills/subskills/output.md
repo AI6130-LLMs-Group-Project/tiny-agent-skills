@@ -1,10 +1,5 @@
-## Output State
+# Output Subskill
 
-Goal:
-- produce final response payload
-
-Do this with LLM reasoning in `write.output`.
-Include short rationale and cite selected evidence IDs.
-
-Exit condition:
-- set `done=true` with valid `write.output`
+1. Compose final response from verdicts and selected citations.
+2. Keep rationale concise and factual.
+3. Return one output object per claim.

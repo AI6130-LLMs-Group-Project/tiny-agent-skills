@@ -1,11 +1,5 @@
-## Select Evidence State
+# Select Evidence Subskill
 
-Goal:
-- select the most relevant evidence for each claim
-
-Do this with LLM reasoning in `write.selected`.
-Use evidence ids already in memory.
-
-Exit condition:
-- `selected` non-empty, then move to `NLI_VERIFY`
-- if empty, move back to `RETRIEVAL`
+1. Score claim-evidence overlap.
+2. Prefer higher credibility when ties happen.
+3. Keep up to 5 evidence rows and output selected ids.

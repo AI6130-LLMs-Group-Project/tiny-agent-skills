@@ -1,10 +1,5 @@
-## Decide State
+# Decide Subskill
 
-Goal:
-- aggregate scores into verdict per claim
-
-Do this with LLM reasoning in `write.verdicts`.
-Prefer `insufficient` when evidence is weak or conflicting.
-
-Exit condition:
-- `verdicts` non-empty -> `OUTPUT`
+1. Aggregate stance scores per claim.
+2. Apply conservative thresholds to reduce false SUPPORT.
+3. Emit final verdict (`supported|refuted|mixed|insufficient`).
