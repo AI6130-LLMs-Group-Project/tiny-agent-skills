@@ -83,6 +83,30 @@ SUBSKILLS = {
         "id": "tool_use_policy",
         "path": str(_SUBSKILLS_DIR / "tool-use-policy.md"),
     },
+    "parse_math_problem": {
+        "id": "parse_math_problem",
+        "path": str(_SUBSKILLS_DIR / "parse-math-problem.md"),
+    },
+    "plan_math_solution": {
+        "id": "plan_math_solution",
+        "path": str(_SUBSKILLS_DIR / "plan-math-solution.md"),
+    },
+    "execute_math_solution": {
+        "id": "execute_math_solution",
+        "path": str(_SUBSKILLS_DIR / "execute-math-solution.md"),
+    },
+    "verify_math_solution": {
+        "id": "verify_math_solution",
+        "path": str(_SUBSKILLS_DIR / "verify-math-solution.md"),
+    },
+    "math_output": {
+        "id": "math_output",
+        "path": str(_SUBSKILLS_DIR / "math-output.md"),
+    },
+    "math_tool_use": {
+        "id": "math_tool_use",
+        "path": str(_SUBSKILLS_DIR / "math-tool-use.md"),
+    },
 }
 
 
@@ -107,16 +131,33 @@ TOOLS = {
         "id": "sentence_extract",
         "path": str(_TOOLS_DIR / "sentence_extract.py"),
     },
+    "math_eval": {
+        "id": "math_eval",
+        "path": str(_TOOLS_DIR / "math_eval.py"),
+    },
+    "math_check": {
+        "id": "math_check",
+        "path": str(_TOOLS_DIR / "math_check.py"),
+    },
 }
 
 
 STATE_TOOL_SCOPE = {
-    "PARSE_CLAIM": [],
-    "RETRIEVAL": ["search", "kb_lookup", "web_search", "page_fetch", "sentence_extract"],
-    "SELECT_EVIDENCE": [],
-    "NLI_VERIFY": [],
-    "DECIDE": [],
-    "OUTPUT": [],
+    "fever": {
+        "PARSE_CLAIM": [],
+        "RETRIEVAL": ["search", "kb_lookup", "web_search", "page_fetch", "sentence_extract"],
+        "SELECT_EVIDENCE": [],
+        "NLI_VERIFY": [],
+        "DECIDE": [],
+        "OUTPUT": [],
+    },
+    "gsm8k": {
+        "PARSE_PROBLEM": [],
+        "PLAN_SOLUTION": [],
+        "EXECUTE_SOLUTION": ["math_eval", "math_check"],
+        "VERIFY_SOLUTION": [],
+        "OUTPUT": [],
+    },
 }
 
 
@@ -132,5 +173,8 @@ def list_tools():
     return list(TOOLS.values())
 
 
-def tools_for_state(state):
-    return list(STATE_TOOL_SCOPE.get(state, []))
+def tools_for_state(state, task: str = "fever"):
+    task_name = (task or "fever").strip().lower()
+    if task_name not in STATE_TOOL_SCOPE:
+        task_name = "fever"
+    return list(STATE_TOOL_SCOPE.get(task_name, {}).get(state, []))
