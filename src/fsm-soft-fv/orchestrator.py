@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from fsm import next_state as fsm_next_state
-from guardrail import check_tool_output, extract_evidence_rows, extract_json_object
+from guardrail import check_action_payload, check_tool_output, extract_evidence_rows, extract_json_object
 from orchestrator_helpers import (
     STOPWORDS,
     clean_text,
@@ -59,6 +59,22 @@ _STAGE_MSG: Dict[str, Tuple[str, str]] = {
     "OUTPUT": (
         "The agent produced final output for this claim.",
         "Next it will move to the next FEVER sample.",
+    ),
+    "PARSE_PROBLEM": (
+        "The agent parsed the math question into target and givens.",
+        "Next it will create a step-by-step solution plan.",
+    ),
+    "PLAN_SOLUTION": (
+        "The agent drafted a compact arithmetic plan.",
+        "Next it will execute calculations from the plan.",
+    ),
+    "EXECUTE_SOLUTION": (
+        "The agent computed a candidate numeric answer.",
+        "Next it will self-check the result for consistency.",
+    ),
+    "VERIFY_SOLUTION": (
+        "The agent verified the computed answer against the question.",
+        "Next it will format the final GSM output.",
     ),
 }
 
@@ -125,9 +141,13 @@ class Orchestrator:
         self.n_retry = max(0, env_int(os.getenv,"N_RETRY", 2))
         self.llm_retry = max(0, env_int(os.getenv,"LLM_JSON_RETRY", 1))
         self.max_steps = max(6, env_int(os.getenv,"SOFT_FSM_MAX_STEPS", 20))
+        self.max_math_tool_calls = max(1, env_int(os.getenv, "SOFT_FSM_MATH_MAX_TOOL_CALLS", 3))
         self.subskill_hint_chars = max(500, env_int(os.getenv,"SUBSKILL_HINT_CHARS", 1000))
         self.controller_hint_chars = max(300, env_int(os.getenv,"CONTROLLER_HINT_CHARS", 700))
-        self.controller_skill = load_text(skill_registry.SKILLS["fsm_fact_verification"]["path"])
+        self.controller_skills = {
+            "fever": load_text(skill_registry.SKILLS["fsm_fact_verification"]["path"]),
+            "gsm8k": load_text(skill_registry.SKILLS["fsm_math_solver"]["path"]),
+        }
         self.subskills = {name: load_text(meta["path"]) for name, meta in skill_registry.SUBSKILLS.items()}
         self.llm_enabled = self._probe_llm()
         self.network_enabled = self._probe_host("en.wikipedia.org", 443)
@@ -180,8 +200,16 @@ class Orchestrator:
         lim = self.subskill_hint_chars if max_chars is None else max_chars
         return text[:lim]
 
+    def _task_name(self) -> str:
+        task = (self.state.task or "fever").strip().lower()
+        if task in {"fact", "fact_verification", "fact-verification"}:
+            return "fever"
+        if task in {"gsm", "math", "gsm8k"}:
+            return "gsm8k"
+        return "fever"
+
     def _controller_hint(self, max_chars: Optional[int] = None) -> str:
-        text = (self.controller_skill or "").strip()
+        text = (self.controller_skills.get(self._task_name()) or self.controller_skills.get("fever") or "").strip()
         if not text:
             return ""
         lim = self.controller_hint_chars if max_chars is None else max_chars
@@ -200,8 +228,9 @@ class Orchestrator:
     ) -> Optional[Dict[str, Any]]:
         if not self.llm_enabled:
             return None
+        task_name = self._task_name()
         system = (
-            "You are an FSM fact-verification sub-agent under soft constraints. "
+            f"You are an FSM {task_name} sub-agent under soft constraints. "
             "Follow policy and stage subskill, then output one JSON object only."
         )
         hint = self._subskill_hint(subskill_id)
@@ -244,7 +273,7 @@ class Orchestrator:
         return None
 
     def _advance(self, status: str) -> None:
-        self.state.tick(fsm_next_state(self.state.fsm, status))
+        self.state.tick(fsm_next_state(self.state.fsm, status, self._task_name()))
 
     def _is_web_search_enabled(self) -> bool:
         if not self.network_enabled:
@@ -270,7 +299,11 @@ class Orchestrator:
     ) -> None:
         if step_callback is None:
             return
-        explanation, next_steps = _STAGE_MSG.get(state_name, _STAGE_MSG["OUTPUT"])
+        if state_name == "OUTPUT" and self._task_name() == "gsm8k":
+            explanation = "The agent produced final output for this math question."
+            next_steps = "Next it will move to the next GSM8K sample."
+        else:
+            explanation, next_steps = _STAGE_MSG.get(state_name, _STAGE_MSG["OUTPUT"])
         step_callback(
             {
                 "step": step_no,
@@ -631,7 +664,7 @@ class Orchestrator:
         self._llm_schema_mismatch("response_output", llm_out)
         return self._fallback_output(claims, verdicts, selected), "fallback"
 
-    def run(self, claim: str, step_callback: Optional[Callable[[Dict[str, Any]], None]] = None) -> Dict[str, Any]:
+    def _run_fever(self, claim: str, step_callback: Optional[Callable[[Dict[str, Any]], None]] = None) -> Dict[str, Any]:
         self.state.claim = claim
         retries: Dict[str, int] = {}
         step_no = 0
@@ -765,4 +798,372 @@ class Orchestrator:
         claims = self.state.claims or [{"id": "s1", "c": claim}]
         out_rows = self._fallback_output(claims, self.state.verdicts, self.state.selected)
         return {"s": "ok", "d": {"out": out_rows}, "e": None, "rb": "none"}
+
+    def _coerce_float(self, value: Any) -> Optional[float]:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+        text = str(value or "").strip()
+        if not text:
+            return None
+        text = text.replace(",", "")
+        m = re.search(r"-?\d+(?:\.\d+)?", text)
+        if not m:
+            return None
+        try:
+            return float(m.group(0))
+        except Exception:
+            return None
+
+    def _parse_problem(self, question: str) -> Dict[str, Any]:
+        contract = "Return JSON: {nq:str,target:str,givens:[str],unit:str}."
+        llm_out = self._call_llm_json(
+            "parse_math_problem",
+            contract,
+            {"question": question, "st": self.state.fsm},
+            max_tokens=260,
+            include_controller=False,
+        )
+        if isinstance(llm_out, dict):
+            nq = clean_text(str(llm_out.get("nq") or llm_out.get("normalized_question") or question))[:320]
+            target = clean_text(str(llm_out.get("target") or llm_out.get("goal") or ""))[:220]
+            givens_raw = llm_out.get("givens", [])
+            givens: List[str] = []
+            if isinstance(givens_raw, list):
+                for g in givens_raw:
+                    gg = clean_text(str(g))
+                    if gg:
+                        givens.append(gg[:180])
+            unit = clean_text(str(llm_out.get("unit") or ""))[:80]
+            return {"nq": nq, "target": target, "givens": givens[:8], "unit": unit, "via": "llm"}
+        return {"nq": clean_text(question)[:320], "target": "", "givens": [], "unit": "", "via": "fallback"}
+
+    def _plan_solution(self, parsed: Dict[str, Any]) -> Dict[str, Any]:
+        contract = "Return JSON: {plan:[str],checks:[str]}; plan length 2..6."
+        llm_out = self._call_llm_json("plan_math_solution", contract, parsed, max_tokens=280)
+        if isinstance(llm_out, dict):
+            plan_raw = llm_out.get("plan")
+            checks_raw = llm_out.get("checks")
+            plan = [clean_text(str(x))[:180] for x in plan_raw] if isinstance(plan_raw, list) else []
+            checks = [clean_text(str(x))[:180] for x in checks_raw] if isinstance(checks_raw, list) else []
+            plan = [p for p in plan if p]
+            checks = [c for c in checks if c]
+            if plan:
+                return {"plan": plan[:6], "checks": checks[:3], "via": "llm"}
+        return {"plan": ["Compute the required quantity directly from the givens."], "checks": [], "via": "fallback"}
+
+    def _tool_result_brief(self, tool_id: str, out: Dict[str, Any]) -> Dict[str, Any]:
+        data = out.get("d") if isinstance(out, dict) else {}
+        if not isinstance(data, dict):
+            return {"ok": False}
+        if tool_id == "math_eval":
+            return {"ok": True, "value": data.get("value")}
+        if tool_id == "math_check":
+            return {"ok": True, "match": data.get("match"), "delta": data.get("delta")}
+        return {"ok": True}
+
+    def _normalize_math_action(self, action: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(action, dict):
+            return {}
+        out = dict(action)
+        a_raw = str(out.get("a") or out.get("action") or "").strip().lower()
+        if not a_raw:
+            if out.get("tool"):
+                a_raw = "tool"
+            elif any(k in out for k in ["ans", "answer", "reasoning", "conf"]):
+                a_raw = "finish"
+        if a_raw in {"final", "done", "answer", "output"}:
+            a_raw = "finish"
+        if a_raw in {"call_tool", "use_tool", "tool_call"}:
+            a_raw = "tool"
+        if a_raw in {"plan", "think", "reason"}:
+            a_raw = "tool"
+        out["a"] = a_raw
+
+        tool_raw = str(out.get("tool") or out.get("name") or out.get("t") or "").strip().lower()
+        if tool_raw in {"calc", "calculator", "evaluate", "eval"}:
+            tool_raw = "math_eval"
+        if tool_raw in {"check", "verify", "compare"}:
+            tool_raw = "math_check"
+        if tool_raw:
+            out["tool"] = tool_raw
+
+        if "ans" not in out and "answer" in out:
+            out["ans"] = out.get("answer")
+        return out
+
+    def _execute_solution_direct(self, question: str, parsed: Dict[str, Any], plan: Dict[str, Any]) -> Dict[str, Any]:
+        contract = "Return JSON: {reasoning:str,ans:number|string,unit:str,conf:low|med|high}."
+        llm_out = self._call_llm_json(
+            "execute_math_solution",
+            contract,
+            {"question": question, "parsed": parsed, "plan": plan},
+            max_tokens=420,
+            include_controller=False,
+        )
+        if isinstance(llm_out, dict):
+            ans = self._coerce_float(llm_out.get("ans"))
+            reasoning = clean_text(str(llm_out.get("reasoning") or llm_out.get("r") or ""))[:420]
+            conf = normalize_conf(llm_out.get("conf"))
+            unit = clean_text(str(llm_out.get("unit") or parsed.get("unit") or ""))[:80]
+            if ans is not None:
+                return {"ans": ans, "reasoning": reasoning, "conf": conf, "unit": unit, "via": "llm"}
+        return {"ans": None, "reasoning": "", "conf": "low", "unit": clean_text(str(parsed.get("unit") or ""))[:80], "via": "fallback"}
+
+    def _execute_solution(self, question: str, parsed: Dict[str, Any], plan: Dict[str, Any]) -> Dict[str, Any]:
+        allowed_tools = skill_registry.tools_for_state(self.state.fsm, task=self._task_name())
+        observations: List[Dict[str, Any]] = []
+        seed_solved: Optional[Dict[str, Any]] = None
+
+        contract = (
+            "Return JSON action. "
+            "Tool mode: {a:'tool',tool:'math_eval|math_check',args:object}. "
+            "Finish mode: {a:'finish',ans:number|string,reasoning:str,conf:low|med|high}."
+        )
+        for turn in range(self.max_math_tool_calls):
+            payload = {
+                "question": question,
+                "parsed": parsed,
+                "plan": plan,
+                "obs": observations[-4:],
+                "turn": turn + 1,
+                "remaining_tool_calls": self.max_math_tool_calls - turn,
+            }
+            action = self._call_llm_json("math_tool_use", contract, payload, max_tokens=260)
+            if not isinstance(action, dict):
+                break
+            action = self._normalize_math_action(action)
+
+            if action.get("a") == "tool":
+                if not action.get("tool"):
+                    repair = self._call_llm_json(
+                        "math_tool_use",
+                        "Return JSON: {tool:'math_eval|math_check',args:object}.",
+                        payload,
+                        max_tokens=120,
+                    )
+                    if isinstance(repair, dict):
+                        repair = self._normalize_math_action(repair)
+                        if repair.get("tool"):
+                            action["tool"] = repair.get("tool")
+                        if isinstance(repair.get("args"), dict):
+                            action["args"] = repair.get("args")
+                if str(action.get("tool")) == "math_eval":
+                    args = action.get("args")
+                    if not isinstance(args, dict):
+                        args = {}
+                    expr = args.get("expr")
+                    if not isinstance(expr, str) or not expr.strip():
+                        expr_out = self._call_llm_json(
+                            "execute_math_solution",
+                            "Return JSON: {expr:str}. Expression must be arithmetic only.",
+                            payload,
+                            max_tokens=120,
+                            include_controller=False,
+                        )
+                        if isinstance(expr_out, dict):
+                            expr = expr_out.get("expr")
+                        if not isinstance(expr, str) or not expr.strip():
+                            if seed_solved is None:
+                                seed_solved = self._execute_solution_direct(question, parsed, plan)
+                            seed_ans = seed_solved.get("ans") if isinstance(seed_solved, dict) else None
+                            expr = str(seed_ans) if seed_ans is not None else ""
+                    action["args"] = {"expr": str(expr).strip(), "vars": args.get("vars", {})}
+
+            ok, msg = check_action_payload(action, allowed_tools)
+            if not ok:
+                self.state.add_history(
+                    "llm:math_tool_action_invalid",
+                    "retry",
+                    {"msg": msg[:120], "action": list(action.keys())[:8], "a": str(action.get("a"))[:40]},
+                )
+                break
+
+            act = action.get("a")
+            if act == "tool":
+                tool_id = str(action.get("tool"))
+                args = action.get("args")
+                if not isinstance(args, dict):
+                    args = {}
+                self.state.tool_requests.append({"id": f"mt{len(self.state.tool_requests) + 1}", "tool": tool_id, "args": args, "for": "q1"})
+                out = self._run_tool_with_retry(tool_id, args, retries=0)
+                self.state.add_history(f"tool:{tool_id}", out.get("s", "error"), {"args": args, "e": out.get("e")})
+                brief = self._tool_result_brief(tool_id, out)
+                brief.update({"tool": tool_id})
+                observations.append(brief)
+                continue
+
+            if act == "finish":
+                if not observations and allowed_tools:
+                    observations.append({"ok": False, "policy": "call_one_tool_before_finish"})
+                    self.state.add_history("llm:math_tool_policy", "retry", {"msg": "finish_without_tool"})
+                    continue
+                ans = self._coerce_float(action.get("ans"))
+                reasoning = clean_text(str(action.get("reasoning") or action.get("r") or ""))[:420]
+                conf = normalize_conf(action.get("conf"))
+                if ans is not None:
+                    used_tools = any(isinstance(ob, dict) and ob.get("tool") for ob in observations)
+                    via = "llm+tools" if used_tools else "llm"
+                    return {"ans": ans, "reasoning": reasoning, "conf": conf, "unit": clean_text(str(parsed.get("unit") or ""))[:80], "via": via}
+                break
+
+        for ob in reversed(observations):
+            if not isinstance(ob, dict):
+                continue
+            val = self._coerce_float(ob.get("value"))
+            if val is not None:
+                return {
+                    "ans": val,
+                    "reasoning": "Answer taken from math_eval tool output.",
+                    "conf": "med",
+                    "unit": clean_text(str(parsed.get("unit") or ""))[:80],
+                    "via": "tool_fallback",
+                }
+
+        solved = self._execute_solution_direct(question, parsed, plan)
+        tool_obs_n = sum(1 for ob in observations if isinstance(ob, dict) and ob.get("tool"))
+        if tool_obs_n > 0:
+            solved["tool_obs_n"] = tool_obs_n
+            if solved.get("via") == "llm":
+                solved["via"] = "llm_after_tools"
+        return solved
+
+    def _verify_solution(self, question: str, parsed: Dict[str, Any], plan: Dict[str, Any], solved: Dict[str, Any]) -> Dict[str, Any]:
+        contract = "Return JSON: {ok:bool,ans:number|string,notes:str,conf:low|med|high}."
+        llm_out = self._call_llm_json(
+            "verify_math_solution",
+            contract,
+            {"question": question, "parsed": parsed, "plan": plan, "solved": solved},
+            max_tokens=260,
+            include_controller=False,
+        )
+        if isinstance(llm_out, dict):
+            ans = self._coerce_float(llm_out.get("ans"))
+            ok = bool(llm_out.get("ok")) if llm_out.get("ok") is not None else False
+            notes = clean_text(str(llm_out.get("notes") or ""))[:220]
+            conf = normalize_conf(llm_out.get("conf") or solved.get("conf"))
+            if ans is not None:
+                return {"ans": ans, "ok": ok, "notes": notes, "conf": conf, "via": "llm"}
+        return {"ans": solved.get("ans"), "ok": False, "notes": "No structured verification output.", "conf": solved.get("conf", "low"), "via": "fallback"}
+
+    def _compose_math_output(self, question: str, verified: Dict[str, Any], solved: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], str]:
+        contract = "Return JSON: {out:[{id:str,answer:number|string,conf:low|med|high,r:str}]}"
+        llm_out = self._call_llm_json(
+            "math_output",
+            contract,
+            {"question": question, "verified": verified, "solved": solved},
+            max_tokens=220,
+        )
+        if isinstance(llm_out, dict):
+            out_raw = first_list(llm_out, ["out", "output", "final"])
+            rows: List[Dict[str, Any]] = []
+            for item in out_raw:
+                if not isinstance(item, dict):
+                    continue
+                answer = self._coerce_float(item.get("answer"))
+                if answer is None:
+                    answer = self._coerce_float(item.get("ans"))
+                conf = normalize_conf(item.get("conf") or verified.get("conf"))
+                rationale = clean_text(str(item.get("r") or item.get("reason") or item.get("rationale") or ""))[:220]
+                if answer is None:
+                    continue
+                rows.append({"id": str(item.get("id") or "q1"), "answer": answer, "conf": conf, "r": rationale})
+            if rows:
+                return rows, "llm"
+
+        ans = verified.get("ans")
+        if ans is None:
+            ans = solved.get("ans")
+        if ans is None:
+            ans = 0.0
+        row = {
+            "id": "q1",
+            "answer": float(ans),
+            "conf": normalize_conf(verified.get("conf") or solved.get("conf")),
+            "r": clean_text(str(verified.get("notes") or solved.get("reasoning") or "Fallback math output."))[:220],
+        }
+        return [row], "fallback"
+
+    def _run_gsm(self, question: str, step_callback: Optional[Callable[[Dict[str, Any]], None]] = None) -> Dict[str, Any]:
+        self.state.claim = question
+        self.state.tool_requests = []
+        step_no = 0
+        parsed: Dict[str, Any] = {}
+        plan: Dict[str, Any] = {}
+        solved: Dict[str, Any] = {}
+        verified: Dict[str, Any] = {}
+
+        while step_no < self.max_steps:
+            step_no += 1
+            current = self.state.fsm
+
+            if current == "PARSE_PROBLEM":
+                parsed = self._parse_problem(question)
+                self.state.norm_claim = parsed.get("nq")
+                self.state.claims = [{"id": "q1", "c": question}]
+                detail = {"via": parsed.get("via"), "givens_n": len(parsed.get("givens", []))}
+                self.state.add_history("llm:parse_problem", "ok", detail)
+                self._emit_step(step_callback, step_no, current, "ok", detail)
+                self._advance("ok")
+                continue
+
+            if current == "PLAN_SOLUTION":
+                plan = self._plan_solution(parsed)
+                self.state.plans = [{"id": "q1", "steps": plan.get("plan", []), "checks": plan.get("checks", [])}]
+                detail = {"via": plan.get("via"), "steps_n": len(plan.get("plan", []))}
+                self.state.add_history("llm:plan_solution", "ok", detail)
+                self._emit_step(step_callback, step_no, current, "ok", detail)
+                self._advance("ok")
+                continue
+
+            if current == "EXECUTE_SOLUTION":
+                n_tools_before = len(self.state.tool_requests)
+                solved = self._execute_solution(question, parsed, plan)
+                self.state.scores = [{"id": "q1", "answer": solved.get("ans"), "conf": solved.get("conf")}]
+                if solved.get("ans") is None:
+                    self.state.add_history("math:execute_empty", "error", {"via": solved.get("via")})
+                    self._emit_step(step_callback, step_no, current, "error", {"via": solved.get("via")})
+                    self._advance("error")
+                    continue
+                detail = {
+                    "via": solved.get("via"),
+                    "conf": solved.get("conf"),
+                    "tool_calls": max(0, len(self.state.tool_requests) - n_tools_before),
+                }
+                self.state.add_history("llm:execute_solution", "ok", detail)
+                self._emit_step(step_callback, step_no, current, "ok", detail)
+                self._advance("ok")
+                continue
+
+            if current == "VERIFY_SOLUTION":
+                verified = self._verify_solution(question, parsed, plan, solved)
+                detail = {"via": verified.get("via"), "ok": verified.get("ok"), "conf": verified.get("conf")}
+                self.state.add_history("llm:verify_solution", "ok", detail)
+                self._emit_step(step_callback, step_no, current, "ok", detail)
+                self._advance("ok")
+                continue
+
+            if current == "OUTPUT":
+                out_rows, via = self._compose_math_output(question, verified, solved)
+                result = {"s": "ok", "d": {"out": out_rows}, "e": None, "rb": "none"}
+                self.state.output = result["d"]
+                detail = {"via": via, "out_n": len(out_rows)}
+                self.state.add_history("llm:math_output", "ok", detail)
+                self._emit_step(step_callback, step_no, current, "ok", detail)
+                return result
+
+            self._emit_step(step_callback, step_no, current, "error", {"reason": "unknown_state"})
+            self._advance("error")
+
+        out_rows, via = self._compose_math_output(question, verified, solved)
+        self.state.output = {"out": out_rows}
+        self.state.add_history("math:max_steps", "error", {"via": via})
+        return {"s": "ok", "d": {"out": out_rows}, "e": None, "rb": "none"}
+
+    def run(self, text: str, step_callback: Optional[Callable[[Dict[str, Any]], None]] = None) -> Dict[str, Any]:
+        task_name = self._task_name()
+        if task_name == "gsm8k":
+            return self._run_gsm(text, step_callback=step_callback)
+        return self._run_fever(text, step_callback=step_callback)
 

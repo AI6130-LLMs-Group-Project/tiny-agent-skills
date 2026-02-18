@@ -50,6 +50,7 @@ class ActionRecord:
 class AgentState:
     sid: str
     fsm: str
+    task: str = "fever"
     rev: int = 0
     claim: Optional[str] = None
     norm_claim: Optional[str] = None
@@ -84,6 +85,7 @@ class AgentState:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "sid": self.sid,
+            "task": self.task,
             "fsm": self.fsm,
             "rev": self.rev,
             "claim": self.claim,

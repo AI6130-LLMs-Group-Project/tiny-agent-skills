@@ -17,7 +17,7 @@
 ##SBATCH --nodelist=TC2N01
 #
 ### Specify Time Limit, format: <min> or <min>:<sec> or <hr>:<min>:<sec> or <days>-<hr>:<min>:<sec> or <days>-<hr> ###
-#SBATCH --time=120
+#SBATCH --time=320
 #
 ### Specify name for the job, filename format for output and error ###
 #SBATCH --job-name=FSMTest100
@@ -167,5 +167,10 @@ export LLM_ENDPOINT="http://127.0.0.1:$PORT"
 # "${PY_CMD[@]}" "$ROOT/src/fsm-soft-fv/fever_runner.py" \
 #  --data "$ROOT/data/paper_dev.jsonl" \
 #  --limit 100 --random --seed 999
+
+echo "Running Math Solving with softFSM..."
+export LLM_ENDPOINT="http://127.0.0.1:$PORT"
+"${PY_CMD[@]}" "$ROOT/src/fsm-soft-fv/gsm_runner.py" \
+  --data "$ROOT/data/ps/gsm8k/gsm8k.json" --limit 500
 
 # Algorithms are FUN!

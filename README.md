@@ -113,6 +113,9 @@ Soft FSM:
 python src/fsm-soft-fv/fever_runner.py --data data/paper_dev.jsonl --limit 100 --random --seed 345
 # live stage-by-stage logs (enabled by default, disable with --no-live-steps)
 python src/fsm-soft-fv/fever_runner.py --data data/paper_dev.jsonl --limit 20 --live-steps
+# GSM8K math runner
+python src/fsm-soft-fv/gsm_runner.py --data data/ps/gsm8k/gsm8k.json --limit 100 --live-steps
+# optional: set SOFT_FSM_MATH_MAX_TOOL_CALLS in .env (default: 3)
 ```
 
 DAG pipeline:

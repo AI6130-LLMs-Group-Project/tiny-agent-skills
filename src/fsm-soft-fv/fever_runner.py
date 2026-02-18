@@ -23,7 +23,7 @@ def _iter_jsonl(path: Path) -> Iterable[Dict]:
 
 
 def _predict_label(claim: str, step_callback: Callable[[Dict], None] | None = None) -> Tuple[str, AgentState]:
-    state = AgentState(sid="fever", fsm="PARSE_CLAIM")
+    state = AgentState(sid="fever", task="fever", fsm="PARSE_CLAIM")
     orch = Orchestrator(state)
     try:
         orch.run(claim, step_callback=step_callback)
