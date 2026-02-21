@@ -119,10 +119,6 @@ TOOLS = {
         "id": "web_search",
         "path": str(_TOOLS_DIR / "web_search.py"),
     },
-    "kb_lookup": {
-        "id": "kb_lookup",
-        "path": str(_TOOLS_DIR / "kb_lookup.py"),
-    },
     "page_fetch": {
         "id": "page_fetch",
         "path": str(_TOOLS_DIR / "page_fetch.py"),
@@ -145,7 +141,7 @@ TOOLS = {
 STATE_TOOL_SCOPE = {
     "fever": {
         "PARSE_CLAIM": [],
-        "RETRIEVAL": ["search", "kb_lookup", "web_search", "page_fetch", "sentence_extract"],
+        "RETRIEVAL": ["search", "web_search", "page_fetch", "sentence_extract"],
         "SELECT_EVIDENCE": [],
         "NLI_VERIFY": [],
         "DECIDE": [],

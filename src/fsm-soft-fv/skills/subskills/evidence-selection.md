@@ -18,6 +18,20 @@ Choose the most claim-resolving evidence snippets from retrieved candidates.
 }
 ```
 
+## Progress Gate Mode (optional)
+When asked for a quality gate instead of `sel`, return:
+```json
+{
+  "status": "ok|back|retry",
+  "conf": "low|med|high",
+  "reason": "short reason"
+}
+```
+Use `back` when current selected evidence is too weak/non-specific and retrieval should be expanded.
+Use `retry` when selection can be improved from current evidence without new retrieval.
+Use `ok` when selected evidence is good enough for NLI.
+If selected evidence is very small or low confidence relative to available evidence, prefer `retry` or `back` over `ok`.
+
 ## Selection Rules
 1. Select only from provided evidence ids.
 2. Prefer snippets with direct entity + predicate overlap (not just topic overlap).

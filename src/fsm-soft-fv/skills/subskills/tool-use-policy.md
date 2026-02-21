@@ -2,7 +2,7 @@
 
 ## Allowed Tool Scope by State
 - `PARSE_CLAIM`: no tool (LLM reasoning)
-- `RETRIEVAL`: `search`, `kb_lookup`, `web_search`, `page_fetch`, `sentence_extract`
+- `RETRIEVAL`: `search`, `web_search`, `page_fetch`, `sentence_extract`
 - `SELECT_EVIDENCE`: no tool (LLM reasoning)
 - `NLI_VERIFY`: no tool (LLM reasoning)
 - `DECIDE`: no tool (LLM reasoning)

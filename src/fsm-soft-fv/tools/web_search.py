@@ -1,6 +1,5 @@
 import json
 import os
-import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -47,28 +46,6 @@ def _http_timeout():
     if val > 15:
         return 15
     return val
-
-
-def _append_evidence(results):
-    kb_path = os.getenv("KB_PATH")
-    root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    if not kb_path:
-        kb_path = os.path.join(root, "runtime", "evidence.jsonl")
-    if not os.path.isabs(kb_path):
-        kb_path = os.path.abspath(os.path.join(root, kb_path))
-    os.makedirs(os.path.dirname(kb_path), exist_ok=True)
-    now = time.strftime("%Y-%m-%d")
-    with open(kb_path, "a", encoding="utf-8") as f:
-        for r in results:
-            text = r.get("snippet") or r.get("title") or ""
-            item = {
-                "id": f"web:{r.get('rid','')}",
-                "text": text,
-                "src": r.get("url") or r.get("src", ""),
-                "d": r.get("d") or now,
-                "cred": "med",
-            }
-            f.write(json.dumps(item, ensure_ascii=True) + "\n")
 
 
 def _serpapi_search(q, lim, key):
@@ -170,8 +147,6 @@ def run(args):
             if not key:
                 return _err("NO_KEY", "tavily_key is required")
             results = _tavily_search(q, lim, key)
-        out = _ok(results)
-        _append_evidence(results)
-        return out
+        return _ok(results)
     except Exception as exc:
         return _err("FETCH_FAIL", str(exc))

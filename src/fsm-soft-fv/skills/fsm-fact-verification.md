@@ -32,7 +32,6 @@ Run FEVER-style claim verification with a soft-constrained FSM where decision-he
 ## Tool Policy
 1. Retrieval-only tool scope:
 - `search`
-- `kb_lookup`
 - `web_search`
 - `page_fetch`
 - `sentence_extract`

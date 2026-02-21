@@ -1,13 +1,12 @@
 import json
 import os
 import re
-import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
 from html import unescape
 
-_VALID_SRC = {"wiki", "web", "news", "kb"}
+_VALID_SRC = {"wiki", "web", "news"}
 _USER_AGENT = "tiny-agent-skills/1.0 (+https://local)"
 
 
@@ -36,28 +35,6 @@ def _load_runtime_env():
                 if k and k not in os.environ:
                     os.environ[k] = v
     _load_runtime_env._loaded = True
-
-
-def _append_evidence(results):
-    kb_path = os.getenv("KB_PATH")
-    root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    if not kb_path:
-        kb_path = os.path.join(root, "runtime", "evidence.jsonl")
-    if not os.path.isabs(kb_path):
-        kb_path = os.path.abspath(os.path.join(root, kb_path))
-    os.makedirs(os.path.dirname(kb_path), exist_ok=True)
-    now = time.strftime("%Y-%m-%d")
-    with open(kb_path, "a", encoding="utf-8") as f:
-        for r in results:
-            text = r.get("snippet") or r.get("title") or ""
-            item = {
-                "id": f"{r.get('src','web')}:{r.get('rid','')}",
-                "text": text,
-                "src": r.get("url") or r.get("src", ""),
-                "d": r.get("d") or now,
-                "cred": "med",
-            }
-            f.write(json.dumps(item, ensure_ascii=True) + "\n")
 
 
 def _clean(text):
@@ -156,7 +133,7 @@ def _duckduckgo_search(q, lim, src):
 def run(args):
     """
     Args schema:
-      {"q": str, "lim": int, "src": "wiki|web|news|kb"}
+      {"q": str, "lim": int, "src": "wiki|web|news"}
 
     Returns:
       {"s": "ok|error", "d": {"results": [..]}, "e": {..}|None}
@@ -172,17 +149,13 @@ def run(args):
     if not isinstance(lim, int) or lim < 1 or lim > 10:
         return _err("BAD_LIMIT", "lim must be 1..10")
     if src not in _VALID_SRC:
-        return _err("BAD_SRC", "src must be wiki|web|news|kb")
-    if src == "kb":
-        return _err("WRONG_TOOL", "use kb_lookup for src=kb")
+        return _err("BAD_SRC", "src must be wiki|web|news")
 
     try:
         if src == "wiki":
             results = _wiki_search(q, lim)
         else:
             results = _duckduckgo_search(q, lim, src)
-        out = _ok(results)
-        _append_evidence(results)
-        return out
+        return _ok(results)
     except Exception as exc:
         return _err("FETCH_FAIL", str(exc))

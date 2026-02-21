@@ -39,6 +39,7 @@ TASK_DEFAULT_NEXT = {
 TASK_BACK_NEXT = {
     "fever": {
         "SELECT_EVIDENCE": "RETRIEVAL",
+        "NLI_VERIFY": "SELECT_EVIDENCE",
     },
     "gsm8k": {},
 }

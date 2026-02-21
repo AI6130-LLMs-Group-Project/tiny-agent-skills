@@ -20,6 +20,20 @@ Classify each selected evidence item as support, refute, or neutral for its mapp
 }
 ```
 
+## Progress Gate Mode (optional)
+When asked for NLI quality/progress check instead of `scores`, return:
+```json
+{
+  "status": "ok|back|retry",
+  "conf": "low|med|high",
+  "reason": "short reason"
+}
+```
+Use `back` when selected evidence should be revised before deciding.
+Use `retry` when NLI labeling should be re-attempted with current selected evidence.
+Use `ok` when score quality/coverage is sufficient for verdict decision.
+If most scores are `neutral` with low confidence, prefer `back` instead of `ok`.
+
 ## Decision Rules
 1. Support when core entity + predicate align, and key constraints (dates/numbers) are compatible.
 2. Refute when explicit contradiction exists:

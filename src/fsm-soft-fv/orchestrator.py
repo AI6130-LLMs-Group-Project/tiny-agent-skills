@@ -12,16 +12,9 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from fsm import next_state as fsm_next_state
 from guardrail import check_action_payload, check_tool_output, extract_evidence_rows, extract_json_object
 from orchestrator_helpers import (
-    STOPWORDS,
     clean_text,
     coerce_int,
     env_int,
-    fallback_decide,
-    fallback_nli,
-    fallback_output,
-    fallback_parse,
-    fallback_query_plans,
-    fallback_select,
     first_dict,
     first_list,
     load_text,
@@ -41,7 +34,7 @@ _STAGE_MSG: Dict[str, Tuple[str, str]] = {
         "Next it will generate retrieval queries for each subclaim.",
     ),
     "RETRIEVAL": (
-        "The agent is collecting candidate evidence from search/KB tools.",
+        "The agent is collecting candidate evidence from retrieval tools.",
         "Next it will pick the most relevant evidence snippets.",
     ),
     "SELECT_EVIDENCE": (
@@ -142,6 +135,8 @@ class Orchestrator:
         self.llm_retry = max(0, env_int(os.getenv,"LLM_JSON_RETRY", 1))
         self.max_steps = max(6, env_int(os.getenv,"SOFT_FSM_MAX_STEPS", 20))
         self.max_math_tool_calls = max(1, env_int(os.getenv, "SOFT_FSM_MATH_MAX_TOOL_CALLS", 3))
+        self.top_n = max(1, env_int(os.getenv, "TOP_N", 3))
+        self.wiki_fetch_limit = max(0, env_int(os.getenv, "WIKI_FETCH_LIMIT", 3))
         self.subskill_hint_chars = max(500, env_int(os.getenv,"SUBSKILL_HINT_CHARS", 1000))
         self.controller_hint_chars = max(300, env_int(os.getenv,"CONTROLLER_HINT_CHARS", 700))
         self.controller_skills = {
@@ -315,9 +310,6 @@ class Orchestrator:
             }
         )
 
-    def _fallback_parse(self, claim: str) -> Dict[str, Any]:
-        return fallback_parse(claim)
-
     def _parse_claim(self, claim: str) -> Dict[str, Any]:
         contract = (
             "Return JSON with keys: nc(str), ct(atomic|multi|question), sd(bool), subs(list). "
@@ -337,21 +329,22 @@ class Orchestrator:
             if llm_out.get("sd") is False:
                 subs = [{"id": "s1", "c": nc or claim[:240]}]
             return {"nc": nc or claim[:240], "subs": subs, "via": "llm"}
-        fb = self._fallback_parse(claim)
-        subs = safe_claims(fb.get("subs"), fb.get("nc", claim)) if fb.get("sd") else [{"id": "s1", "c": fb.get("nc", claim)}]
-        return {"nc": fb.get("nc", claim), "subs": subs, "via": "fallback"}
-
-    def _fallback_query_plans(self, claims: List[Dict[str, str]]) -> List[Dict[str, Any]]:
-        return fallback_query_plans(claims)
+        text = clean_text(claim)[:240]
+        return {"nc": text, "subs": [{"id": "s1", "c": text}], "via": "default"}
 
     def _plan_queries(self, claims: List[Dict[str, str]]) -> Tuple[List[Dict[str, Any]], str]:
         contract = "Return JSON: {plans:[{id:str,q:[str],lim:int}]}, 1..4 queries, each <=8 tokens."
         llm_out = self._call_llm_json("retrieval_planning", contract, {"claims": claims}, max_tokens=220)
         if not isinstance(llm_out, dict):
-            return self._fallback_query_plans(claims), "fallback"
+            out = []
+            for c in claims:
+                cid = str(c.get("id", "s1"))
+                ctext = clean_text(str(c.get("c") or ""))[:96]
+                out.append({"id": cid, "q": [ctext] if ctext else [], "lim": 4})
+            return [x for x in out if x.get("q")], "default"
 
         claim_ids = {c.get("id") for c in claims}
-        default_cid = claims[0].get("id", "s1") if len(claims) == 1 else None
+        default_cid = str(claims[0].get("id", "s1")) if len(claims) == 1 else None
         plans_raw = first_list(llm_out, ["plans", "query_plan", "plan", "out"])
         if not plans_raw and default_cid:
             qsolo = first_list(llm_out, ["queries", "q"])
@@ -391,62 +384,151 @@ class Orchestrator:
 
         if plans:
             return plans, "llm"
-        self._llm_schema_mismatch("retrieval_planning", llm_out)
-        return self._fallback_query_plans(claims), "fallback"
+        out = []
+        for c in claims:
+            cid = str(c.get("id", "s1"))
+            ctext = clean_text(str(c.get("c") or ""))[:96]
+            out.append({"id": cid, "q": [ctext] if ctext else [], "lim": 4})
+        return [x for x in out if x.get("q")], "default"
 
-    def _query_overlap_ok(self, query: str, rows: List[Dict[str, Any]]) -> bool:
-        q_terms = {t for t in re.findall(r"[a-z0-9]+", query.lower()) if t not in STOPWORDS}
-        if not q_terms:
-            return True
-        best = 0
-        for r in rows:
-            txt = f"{r.get('title', '')} {r.get('snippet', '')}".lower()
-            t_terms = {t for t in re.findall(r"[a-z0-9]+", txt) if t not in STOPWORDS}
-            best = max(best, len(q_terms.intersection(t_terms)))
-        return best >= (1 if len(q_terms) <= 3 else 2)
+    def _arrange_retrieval_tools(
+        self,
+        claim_id: str,
+        claim_text: str,
+        query: str,
+    ) -> Tuple[List[str], bool, int, str]:
+        available: List[str] = []
+        if self.network_enabled:
+            available.append("search")
+        if self._is_web_search_enabled():
+            available.append("web_search")
+        if not available:
+            return [], False, 2, "default"
+
+        contract = "Return JSON: {tools:[search|web_search],expand_pages:bool,top_n:int}"
+        llm_out = self._call_llm_json(
+            "retrieval_execution",
+            contract,
+            {
+                "claim_id": claim_id,
+                "claim": claim_text,
+                "query": query,
+                "available": available,
+            },
+            max_tokens=180,
+        )
+        if not isinstance(llm_out, dict):
+            return available, True, self.top_n, "default"
+
+        out_tools: List[str] = []
+        raw_tools = llm_out.get("tools")
+        if isinstance(raw_tools, list):
+            for t in raw_tools:
+                tt = str(t).strip().lower()
+                if tt in available and tt not in out_tools:
+                    out_tools.append(tt)
+        if not out_tools:
+            pick = str(llm_out.get("tool") or "").strip().lower()
+            if pick in available:
+                out_tools = [pick]
+        if not out_tools:
+            out_tools = available
+
+        expand_pages = bool(llm_out.get("expand_pages")) if llm_out.get("expand_pages") is not None else True
+        top_n = coerce_int(llm_out.get("top_n", self.top_n), default=self.top_n, lo=1, hi=8)
+        return out_tools, expand_pages, top_n, "llm"
+
+    def _extract_page_rows(self, base_rows: List[Dict[str, Any]], query: str, top_n: int) -> List[Dict[str, Any]]:
+        out_rows: List[Dict[str, Any]] = []
+        max_pages = self.wiki_fetch_limit
+        if max_pages <= 0:
+            return out_rows
+
+        n_pages = 0
+        for row in base_rows:
+            if n_pages >= max_pages:
+                break
+            url = str(row.get("url") or "").strip()
+            if not (url.startswith("http://") or url.startswith("https://")):
+                continue
+            n_pages += 1
+            fetched = self._run_tool_with_retry("page_fetch", {"url": url, "max_bytes": 180000, "timeout": 10}, retries=0)
+            self.state.add_history("tool:page_fetch", fetched.get("s", "error"), {"url": url, "e": fetched.get("e")})
+            if fetched.get("s") != "ok":
+                continue
+            text = str((fetched.get("d") or {}).get("text") or "")
+            if not text:
+                continue
+            extracted = self._run_tool_with_retry("sentence_extract", {"text": text, "query": query, "top_n": top_n}, retries=0)
+            self.state.add_history("tool:sentence_extract", extracted.get("s", "error"), {"url": url, "e": extracted.get("e")})
+            if extracted.get("s") != "ok":
+                continue
+            for idx, item in enumerate((extracted.get("d") or {}).get("sentences", []), start=1):
+                if not isinstance(item, dict):
+                    continue
+                sent = clean_text(str(item.get("s") or ""))
+                if not sent:
+                    continue
+                out_rows.append(
+                    {
+                        "rid": f"{row.get('rid', 'r')}e{idx}",
+                        "snippet": sent,
+                        "url": url,
+                        "src": "extract",
+                        "d": row.get("d"),
+                        "cred": "med",
+                    }
+                )
+        return out_rows
 
     def _rows_to_evidence(self, rows: List[Dict[str, Any]], claim_id: str) -> List[EvidenceItem]:
         out: List[EvidenceItem] = []
-        cred_default = {"wiki": "low", "web": "low", "news": "low", "kb": "med", "extract": "med"}
-        for r in rows:
+        cred_default = {"wiki": "med", "web": "med", "news": "med", "extract": "med"}
+        for idx, r in enumerate(rows, start=1):
             if not isinstance(r, dict):
                 continue
             text = r.get("snippet") or r.get("title") or ""
             if not text:
                 continue
             src = r.get("src", "web")
+            rid = str(r.get("rid") or f"r{idx}")
+            url = str(r.get("url") or src)
             out.append(
                 EvidenceItem(
-                    eid=f"{src}:{r.get('rid', '')}",
+                    eid=f"{claim_id}:{src}:{rid}",
                     claim_id=claim_id,
                     s=" ".join(re.sub(r"<[^>]+>", " ", str(text)).split()),
-                    src=r.get("url") or src,
+                    src=url,
                     d=r.get("d"),
                     cred=r.get("cred") or cred_default.get(src, "med"),
                 )
             )
         return out
 
-    def _retrieve_for_query(self, claim_id: str, query: str, lim: int) -> List[EvidenceItem]:
-        tools = ["kb_lookup"]
-        if self.network_enabled:
-            tools.append("search")
-        if self._is_web_search_enabled():
-            tools.append("web_search")
-
+    def _retrieve_for_query(self, claim_id: str, claim_text: str, query: str, lim: int) -> List[EvidenceItem]:
+        tools, expand_pages, top_n, arranged_via = self._arrange_retrieval_tools(claim_id, claim_text, query)
+        self.state.add_history(
+            "llm:retrieval_execution",
+            "ok",
+            {"via": arranged_via, "tools": tools, "expand_pages": expand_pages, "top_n": top_n},
+        )
+        rows_collected: List[Dict[str, Any]] = []
         for tool_id in tools:
             args: Dict[str, Any] = {"q": query, "lim": lim}
             if tool_id == "search":
                 args["src"] = "wiki"
-            retry = 0 if tool_id in {"search", "web_search", "kb_lookup"} else None
-            out = self._run_tool_with_retry(tool_id, args, retries=retry)
+            out = self._run_tool_with_retry(tool_id, args, retries=0)
             self.state.add_history(f"tool:{tool_id}", out.get("s", "error"), {"args": args, "e": out.get("e")})
             if out.get("s") != "ok":
                 continue
             rows = extract_evidence_rows(out)
-            if rows and self._query_overlap_ok(query, rows):
-                return self._rows_to_evidence(rows, claim_id)
-        return []
+            if rows:
+                rows_collected.extend(rows[:lim])
+        if not rows_collected:
+            return []
+        if expand_pages:
+            rows_collected.extend(self._extract_page_rows(rows_collected, query, top_n))
+        return self._rows_to_evidence(rows_collected, claim_id)
 
     def _dedupe_evidence(self, items: List[EvidenceItem]) -> List[EvidenceItem]:
         out: List[EvidenceItem] = []
@@ -458,11 +540,9 @@ class Orchestrator:
                 out.append(item)
         return out
 
-    def _fallback_select(self, claims: List[Dict[str, str]], ev_rows: List[Dict[str, Any]]) -> List[Dict[str, str]]:
-        return fallback_select(claims, ev_rows)
-
     def _select_evidence(self, claims: List[Dict[str, str]], ev_rows: List[Dict[str, Any]]) -> Tuple[List[Dict[str, str]], str]:
-        contract = "Return JSON: {sel:[{eid:str,for:str}]}. Select up to 5 from provided evidence only."
+        select_cap = max(4, min(8, self.top_n * 2))
+        contract = f"Return JSON: {{sel:[{{eid:str,for:str}}]}}. Select up to {select_cap} from provided evidence only."
         llm_out = self._call_llm_json("evidence_selection", contract, {"claims": claims, "evidence": ev_rows}, max_tokens=220)
         valid_eids = {e.get("eid") for e in ev_rows}
         claim_ids = {c.get("id") for c in claims}
@@ -471,7 +551,17 @@ class Orchestrator:
         snippet_to_eid = {" ".join(str(e.get("s", "")).lower().split())[:120]: str(e.get("eid")) for e in ev_rows if isinstance(e, dict)}
 
         if not isinstance(llm_out, dict):
-            return self._fallback_select(claims, ev_rows), "fallback"
+            picked: List[Dict[str, str]] = []
+            by_claim: Dict[str, int] = {}
+            for ev in ev_rows:
+                cid = str(ev.get("for") or default_cid or "")
+                eid = str(ev.get("eid") or "")
+                if cid in claim_ids and eid and by_claim.get(cid, 0) < 2:
+                    by_claim[cid] = by_claim.get(cid, 0) + 1
+                    picked.append({"eid": eid, "for": cid})
+                if len(picked) >= select_cap:
+                    break
+            return picked, "default"
 
         sel_raw = first_list(llm_out, ["sel", "selected", "evidence", "selected_evidence", "out"])
         out: List[Dict[str, str]] = []
@@ -500,12 +590,107 @@ class Orchestrator:
                 out.append({"eid": str(eid), "for": str(cid)})
 
         if out:
-            return out[:5], "llm"
-        self._llm_schema_mismatch("evidence_selection", llm_out)
-        return self._fallback_select(claims, ev_rows), "fallback"
+            return out[:select_cap], "llm"
+        return [], "default"
 
-    def _fallback_nli(self, claims: List[Dict[str, str]], sel_rows: List[Dict[str, Any]]) -> List[Dict[str, str]]:
-        return fallback_nli(claims, sel_rows)
+    def _assess_selection_progress(
+        self,
+        claims: List[Dict[str, str]],
+        ev_rows: List[Dict[str, Any]],
+        selected: List[Dict[str, str]],
+    ) -> Dict[str, Any]:
+        contract = "Return JSON: {status:ok|back|retry,conf:low|med|high,reason:str}."
+        selected_map = {str(s.get("eid")) for s in selected if isinstance(s, dict)}
+        selected_rows = [e for e in ev_rows if str(e.get("eid")) in selected_map][: max(4, self.top_n)]
+        llm_out = self._call_llm_json(
+            "evidence_selection",
+            contract,
+            {
+                "claims": claims,
+                "target_top_n": self.top_n,
+                "evidence_n": len(ev_rows),
+                "selected_n": len(selected),
+                "selected_rows": selected_rows,
+            },
+            max_tokens=160,
+        )
+        if isinstance(llm_out, dict):
+            st = str(llm_out.get("status") or "").strip().lower()
+            if st in {"ok", "back", "retry"}:
+                conf = normalize_conf(llm_out.get("conf"))
+                # Soft guardrail: a low-confidence "ok" with tiny selection should re-open selection/retrieval.
+                if st == "ok" and conf == "low" and len(selected) < max(2, min(self.top_n, 3)) and len(ev_rows) >= self.top_n:
+                    st = "retry"
+                return {
+                    "status": st,
+                    "conf": conf,
+                    "reason": clean_text(str(llm_out.get("reason") or ""))[:160],
+                    "via": "llm",
+                }
+        if not selected:
+            return {"status": "back", "conf": "low", "reason": "No selected evidence.", "via": "default"}
+        min_sel = max(2, min(self.top_n, 3))
+        if len(selected) < min_sel:
+            if len(ev_rows) >= min_sel * 2:
+                return {"status": "retry", "conf": "low", "reason": "Selection coverage is too small for current evidence.", "via": "default"}
+            return {"status": "back", "conf": "low", "reason": "Need broader retrieval for better evidence.", "via": "default"}
+        return {"status": "ok", "conf": "med", "reason": "Selected evidence available.", "via": "default"}
+
+    def _assess_nli_progress(
+        self,
+        claims: List[Dict[str, str]],
+        sel_rows: List[Dict[str, Any]],
+        scores: List[Dict[str, str]],
+    ) -> Dict[str, Any]:
+        contract = "Return JSON: {status:ok|back|retry,conf:low|med|high,reason:str}."
+        summary = {"support": 0, "refute": 0, "neutral": 0, "high": 0, "med": 0, "low": 0}
+        for s in scores:
+            if not isinstance(s, dict):
+                continue
+            st = str(s.get("st") or "").strip().lower()
+            cf = normalize_conf(s.get("conf"))
+            if st in summary:
+                summary[st] += 1
+            summary[cf] += 1
+
+        llm_out = self._call_llm_json(
+            "nli_verification",
+            contract,
+            {
+                "claims": claims,
+                "target_top_n": self.top_n,
+                "selected_n": len(sel_rows),
+                "scores_n": len(scores),
+                "summary": summary,
+                "scores": scores[: max(4, self.top_n)],
+                "gate_policy": [
+                    "If scores are mostly neutral+low confidence, choose back.",
+                    "If stance coverage is weak or ambiguous for decision, choose back.",
+                    "Use ok only when score quality is sufficient for verdict decision.",
+                ],
+            },
+            max_tokens=160,
+            include_controller=True,
+        )
+        if isinstance(llm_out, dict):
+            st = str(llm_out.get("status") or "").strip().lower()
+            if st in {"ok", "back", "retry"}:
+                conf = normalize_conf(llm_out.get("conf"))
+                # Soft guardrail: avoid advancing on uniformly weak neutral signals.
+                if st == "ok" and conf == "low" and summary["support"] == 0 and summary["refute"] == 0:
+                    st = "back"
+                return {
+                    "status": st,
+                    "conf": conf,
+                    "reason": clean_text(str(llm_out.get("reason") or ""))[:160],
+                    "via": "llm",
+                }
+
+        if not scores:
+            return {"status": "back", "conf": "low", "reason": "No NLI scores.", "via": "default"}
+        if summary["support"] == 0 and summary["refute"] == 0 and summary["high"] == 0 and summary["med"] <= 1:
+            return {"status": "back", "conf": "low", "reason": "Only weak neutral NLI scores.", "via": "default"}
+        return {"status": "ok", "conf": "med", "reason": "NLI scores available.", "via": "default"}
 
     def _nli_scores(self, claims: List[Dict[str, str]], sel_rows: List[Dict[str, Any]]) -> Tuple[List[Dict[str, str]], str]:
         contract = "Return JSON: {scores:[{eid:str,for:str,st:support|refute|neutral,conf:low|med|high}]}"
@@ -528,7 +713,19 @@ class Orchestrator:
                     claim_to_eids.setdefault(cid, []).append(eid)
 
         if not isinstance(llm_out, dict):
-            return self._fallback_nli(claims, sel_rows), "fallback"
+            default_scores = []
+            for row in sel_rows:
+                if not isinstance(row, dict):
+                    continue
+                default_scores.append(
+                    {
+                        "eid": str(row.get("eid") or ""),
+                        "for": str(row.get("for") or default_cid or "s1"),
+                        "st": "neutral",
+                        "conf": "low",
+                    }
+                )
+            return default_scores, "default"
 
         scores_raw = first_list(llm_out, ["scores", "results", "nli", "labels", "classifications", "out"])
         out: List[Dict[str, str]] = []
@@ -562,11 +759,19 @@ class Orchestrator:
 
         if out:
             return out, "llm"
-        self._llm_schema_mismatch("nli_verification", llm_out)
-        return self._fallback_nli(claims, sel_rows), "fallback"
-
-    def _fallback_decide(self, claims: List[Dict[str, str]], scores: List[Dict[str, str]]) -> List[Dict[str, str]]:
-        return fallback_decide(claims, scores)
+        default_scores = []
+        for row in sel_rows:
+            if not isinstance(row, dict):
+                continue
+            default_scores.append(
+                {
+                    "eid": str(row.get("eid") or ""),
+                    "for": str(row.get("for") or default_cid or "s1"),
+                    "st": "neutral",
+                    "conf": "low",
+                }
+            )
+        return default_scores, "default"
 
     def _decide(self, claims: List[Dict[str, str]], scores: List[Dict[str, str]]) -> Tuple[List[Dict[str, str]], str]:
         contract = "Return JSON: {ver:[{id:str,v:supported|refuted|mixed|insufficient,conf:low|med|high}]}"
@@ -574,7 +779,7 @@ class Orchestrator:
         claim_ids = {c.get("id") for c in claims}
         default_cid = claims[0].get("id", "s1") if len(claims) == 1 else None
         if not isinstance(llm_out, dict):
-            return self._fallback_decide(claims, scores), "fallback"
+            return [{"id": str(c.get("id", "s1")), "v": "insufficient", "conf": "low"} for c in claims], "default"
 
         ver_raw = first_list(llm_out, ["ver", "verdicts", "decisions", "judgments", "out"])
         if not ver_raw:
@@ -615,11 +820,7 @@ class Orchestrator:
 
         if out:
             return out, "llm"
-        self._llm_schema_mismatch("verdict_decision", llm_out)
-        return self._fallback_decide(claims, scores), "fallback"
-
-    def _fallback_output(self, claims: List[Dict[str, str]], verdicts: List[Dict[str, str]], selected: List[Dict[str, str]]) -> List[Dict[str, Any]]:
-        return fallback_output(claims, verdicts, selected)
+        return [{"id": str(c.get("id", "s1")), "v": "insufficient", "conf": "low"} for c in claims], "default"
 
     def _compose_output(self, claims: List[Dict[str, str]], verdicts: List[Dict[str, str]], selected: List[Dict[str, str]]) -> Tuple[List[Dict[str, Any]], str]:
         contract = (
@@ -630,7 +831,28 @@ class Orchestrator:
         claim_ids = {c.get("id") for c in claims}
         default_cid = claims[0].get("id", "s1") if len(claims) == 1 else None
         if not isinstance(llm_out, dict):
-            return self._fallback_output(claims, verdicts, selected), "fallback"
+            verdict_map = {str(v.get("id")): v for v in verdicts if isinstance(v, dict)}
+            cite_map: Dict[str, List[str]] = {}
+            for s in selected:
+                if isinstance(s, dict):
+                    cid = str(s.get("for") or "")
+                    eid = str(s.get("eid") or "")
+                    if cid and eid:
+                        cite_map.setdefault(cid, []).append(eid)
+            rows = []
+            for c in claims:
+                cid = str(c.get("id", "s1"))
+                vv = verdict_map.get(cid, {"v": "insufficient", "conf": "low"})
+                rows.append(
+                    {
+                        "id": cid,
+                        "ver": str(vv.get("v", "insufficient")),
+                        "conf": normalize_conf(vv.get("conf")),
+                        "r": "LLM output unavailable; conservative verdict.",
+                        "cite": cite_map.get(cid, [])[:2],
+                    }
+                )
+            return rows, "default"
 
         out_raw = first_list(llm_out, ["out", "output", "final"])
         if not out_raw:
@@ -661,8 +883,13 @@ class Orchestrator:
 
         if out:
             return out, "llm"
-        self._llm_schema_mismatch("response_output", llm_out)
-        return self._fallback_output(claims, verdicts, selected), "fallback"
+        verdict_map = {str(v.get("id")): v for v in verdicts if isinstance(v, dict)}
+        rows = []
+        for c in claims:
+            cid = str(c.get("id", "s1"))
+            vv = verdict_map.get(cid, {"v": "insufficient", "conf": "low"})
+            rows.append({"id": cid, "ver": vv.get("v", "insufficient"), "conf": normalize_conf(vv.get("conf")), "r": "", "cite": []})
+        return rows, "default"
 
     def _run_fever(self, claim: str, step_callback: Optional[Callable[[Dict[str, Any]], None]] = None) -> Dict[str, Any]:
         self.state.claim = claim
@@ -689,15 +916,17 @@ class Orchestrator:
                 self.state.add_history("llm:retrieval_plan", "ok", {"via": via, "n_plans": len(plans)})
                 collected: List[EvidenceItem] = []
                 n_queries = 0
+                claim_map = {str(c.get("id", "s1")): str(c.get("c") or "") for c in self.state.claims if isinstance(c, dict)}
                 for p in plans:
-                    cid = p.get("id", "s1")
+                    cid = str(p.get("id", "s1"))
+                    claim_text = claim_map.get(cid, self.state.norm_claim or claim)
                     lim = p.get("lim", 4)
                     for q in p.get("q", []):
                         n_queries += 1
-                        collected.extend(self._retrieve_for_query(cid, q, lim))
+                        collected.extend(self._retrieve_for_query(cid, claim_text, q, lim))
                 collected = self._dedupe_evidence(collected)
+                self.state.evidence = collected
                 if collected:
-                    self.state.add_evidence(collected)
                     self._emit_step(step_callback, step_no, current, "ok", {"via": via, "queries": n_queries, "evidence_n": len(collected)})
                     self._advance("ok")
                     continue
@@ -709,22 +938,46 @@ class Orchestrator:
                 if status == "retry":
                     self._advance("retry")
                     continue
-                self._set_default_verdicts()
                 self._advance("error")
                 continue
 
             if current == "SELECT_EVIDENCE":
                 ev_in = [{"eid": e.eid, "for": e.claim_id, "s": e.s, "src": e.src, "d": e.d, "cred": e.cred} for e in self.state.evidence]
                 if not ev_in:
-                    self._emit_step(step_callback, step_no, current, "back", {"reason": "no_evidence"})
-                    self._advance("back")
+                    tries = retries.get("SELECT_NO_EVIDENCE", 0) + 1
+                    retries["SELECT_NO_EVIDENCE"] = tries
+                    status = "back" if tries <= self.n_retry else "error"
+                    self.state.selected = []
+                    self.state.add_history("select_no_evidence", status, {"tries": tries})
+                    self._emit_step(step_callback, step_no, current, status, {"reason": "no_evidence", "tries": tries})
+                    if status == "back":
+                        self._advance("back")
+                        continue
+                    self._advance("error")
                     continue
                 selected, via = self._select_evidence(self.state.claims, ev_in)
                 if selected:
                     self.state.selected = selected
-                    detail = {"via": via, "selected_n": len(selected)}
-                    self.state.add_history("llm:evidence_selection", "ok", detail)
-                    self._emit_step(step_callback, step_no, current, "ok", detail)
+                    gate = self._assess_selection_progress(self.state.claims, ev_in, selected)
+                    detail = {"via": via, "selected_n": len(selected), "gate": gate}
+                    gate_status = str(gate.get("status") or "ok")
+                    if gate_status == "ok":
+                        self.state.add_history("llm:evidence_selection", "ok", detail)
+                        self._emit_step(step_callback, step_no, current, "ok", detail)
+                        self._advance("ok")
+                        continue
+
+                    tries = retries.get("SELECT_GATE", 0) + 1
+                    retries["SELECT_GATE"] = tries
+                    self.state.add_history("select_gate", gate_status, {"tries": tries, "gate": gate})
+                    self._emit_step(step_callback, step_no, current, gate_status, {"tries": tries, "gate": gate})
+                    if gate_status == "back" and tries <= self.n_retry:
+                        self._advance("back")
+                        continue
+                    if gate_status == "retry" and tries <= self.n_retry:
+                        self._advance("retry")
+                        continue
+                    self.state.add_history("select_gate_exhausted", "ok", {"tries": tries})
                     self._advance("ok")
                     continue
                 tries = retries.get("SELECT_EMPTY", 0) + 1
@@ -735,7 +988,7 @@ class Orchestrator:
                 if status == "back":
                     self._advance("back")
                     continue
-                self._set_default_verdicts()
+                self.state.selected = []
                 self._advance("error")
                 continue
 
@@ -747,20 +1000,51 @@ class Orchestrator:
                     if e.eid in selected_ids
                 ]
                 if not sel_rows:
-                    self._set_default_verdicts()
-                    self._emit_step(step_callback, step_no, current, "error", {"reason": "no_selected_rows"})
+                    tries = retries.get("NLI_NO_SELECTED", 0) + 1
+                    retries["NLI_NO_SELECTED"] = tries
+                    status = "back" if tries <= self.n_retry else "error"
+                    self.state.scores = []
+                    self.state.add_history("nli_no_selected", status, {"tries": tries})
+                    self._emit_step(step_callback, step_no, current, status, {"reason": "no_selected_rows", "tries": tries})
+                    if status == "back":
+                        self._advance("back")
+                        continue
                     self._advance("error")
                     continue
                 scores, via = self._nli_scores(self.state.claims, sel_rows)
                 if scores:
                     self.state.scores = scores
-                    detail = {"via": via, "scores_n": len(scores)}
-                    self.state.add_history("llm:nli_verify", "ok", detail)
-                    self._emit_step(step_callback, step_no, current, "ok", detail)
+                    gate = self._assess_nli_progress(self.state.claims, sel_rows, scores)
+                    detail = {"via": via, "scores_n": len(scores), "gate": gate}
+                    gate_status = str(gate.get("status") or "ok")
+                    if gate_status == "ok":
+                        self.state.add_history("llm:nli_verify", "ok", detail)
+                        self._emit_step(step_callback, step_no, current, "ok", detail)
+                        self._advance("ok")
+                        continue
+
+                    tries = retries.get("NLI_GATE", 0) + 1
+                    retries["NLI_GATE"] = tries
+                    self.state.add_history("nli_gate", gate_status, {"tries": tries, "gate": gate})
+                    self._emit_step(step_callback, step_no, current, gate_status, {"tries": tries, "gate": gate})
+                    if gate_status == "back" and tries <= self.n_retry:
+                        self._advance("back")
+                        continue
+                    if gate_status == "retry" and tries <= self.n_retry:
+                        self._advance("retry")
+                        continue
+                    self.state.add_history("nli_gate_exhausted", "ok", {"tries": tries})
                     self._advance("ok")
                     continue
-                self._set_default_verdicts()
-                self._emit_step(step_callback, step_no, current, "error", {"reason": "nli_empty"})
+                tries = retries.get("NLI_EMPTY", 0) + 1
+                retries["NLI_EMPTY"] = tries
+                status = "back" if tries <= self.n_retry else "error"
+                self.state.scores = []
+                self.state.add_history("nli_empty", status, {"tries": tries})
+                self._emit_step(step_callback, step_no, current, status, {"reason": "nli_empty", "tries": tries})
+                if status == "back":
+                    self._advance("back")
+                    continue
                 self._advance("error")
                 continue
 
@@ -780,9 +1064,6 @@ class Orchestrator:
                 if not self.state.verdicts:
                     self._set_default_verdicts()
                 out_rows, via = self._compose_output(self.state.claims, self.state.verdicts, self.state.selected)
-                if not out_rows:
-                    out_rows = self._fallback_output(self.state.claims, self.state.verdicts, self.state.selected)
-                    via = "fallback"
                 result = {"s": "ok", "d": {"out": out_rows}, "e": None, "rb": "none"}
                 self.state.output = result["d"]
                 detail = {"via": via, "out_n": len(out_rows)}
@@ -796,7 +1077,7 @@ class Orchestrator:
 
         self._set_default_verdicts()
         claims = self.state.claims or [{"id": "s1", "c": claim}]
-        out_rows = self._fallback_output(claims, self.state.verdicts, self.state.selected)
+        out_rows, _ = self._compose_output(claims, self.state.verdicts, self.state.selected)
         return {"s": "ok", "d": {"out": out_rows}, "e": None, "rb": "none"}
 
     def _coerce_float(self, value: Any) -> Optional[float]:
