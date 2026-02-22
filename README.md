@@ -1,276 +1,638 @@
-# Tiny Agent Skills v2（数学教育智能体）
+# Environment Setup
 
-Tiny Agent Skills v2 for math education with three core skills:
+## Python + .env
+This project targets Python 3.12. Create `.env` in the project root (copy from `.env.example`).
 
-面向数学教育场景的 Tiny Agent Skills v2，包含三类核心能力：
+## Install Dependencies
+Dependencies are unified across `pyproject.toml` and `requirements.txt`.
 
-1. `math_qa`：数学题目解答 / Math question answering
-2. `math_diagnosis`：学习成果检测与薄弱点定位 / Learning diagnosis and gap analysis
-3. `math_tutoring`：分步讲解与练习辅导 / Step-by-step tutoring and practice
-
----
-
-## 项目结构 | Project Structure
-
-- `core/`：运行配置与统一 Runner / shared config and runner
-- `skills/`：三类技能定义（`SKILL.md` + `rules/*.md`）/ skill definitions
-- `math_tools.py`：安全数学计算工具 / safe math tool
-- `tool_registry.py`：工具注册与解析 / tool registry
-- `run_math_edu_skill.py`：统一命令行入口 / unified CLI entry
-- `inputs/`：示例输入文件 / input templates
-- `outputs/`：运行输出文件 / run outputs
-- `.vscode/launch.json`：VS Code 一键运行配置 / one-click debug configs
-
----
-
-## 环境准备 | Setup
-
-### 中文
-
-1. 建议使用 Python 3.10+。
-2. 在项目根目录执行。
-3. 若有依赖文件，先安装依赖。
-
-### English
-
-1. Use Python 3.10+ (recommended).
-2. Run all commands from the project root (`tiny_agent_skills_v2`).
-3. If this repository has `requirements.txt`, install dependencies first.
-4. Ensure your LLM backend is reachable through `--base-url` and accepts the model name from `--model`.
-5. Prepare `inputs/*.txt` before running each skill, or pass text directly with `--task`.
-
+### uv (recommended)
 ```bash
-# Optional
+uv sync --all-groups
+uv run python script/run_tests.py
+```
+
+### pip
+```bash
 python -m venv .venv
-# Windows PowerShell
 .\.venv\Scripts\Activate.ps1
-
-# If requirements.txt exists
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
+python -m pip install -e .
 ```
 
----
+Optional dev deps:
+```bash
+python -m pip install pytest hypothesis
+```
 
-## 命令行参数 | CLI Arguments
+## Install llama.cpp
+
+### MacOS / Linux / WSL
+```bash
+mkdir -p runtime && cd runtime
+git clone https://github.com/ggerganov/llama.cpp.git llama-cpp
+cd llama-cpp
+mkdir -p build && cd build
+cmake .. -DLLAMA_BUILD_SERVER=ON
+cmake --build . --target llama-server --config Release -j2
+cd ../../..
+```
+
+### Windows
+
+```bat
+script\setup_llama_cpp.bat
+```
+
+## Quickstart (Qwen3-VL server)
+
+### MacOS / Linux / WSL
+
+Install `llama.cpp` first, then download the model, then start the server:
 
 ```bash
-python run_math_edu_skill.py [OPTIONS]
+# 1  create directories for models
+mkdir -p runtime/models
+
+# 2 download Qwen3-VL-2B model + mmproj
+bash script/download_qwen3vl.sh
+
+# 3 run the server
+bash script/run_qwen3vl_server.sh
 ```
 
-常用参数 / Common options:
+### Windows
 
-- `--skill {math_qa,math_diagnosis,math_tutoring}`：选择技能 / choose skill
-- `--task "..."`：直接传入任务文本 / inline task
-- `--task-file path`：从文件读取任务 / read task from file
-- `--output-file path`：将结果写入文件 / save result to file
-- `--base-url URL`：模型服务地址 / model service URL
-- `--model NAME`：模型名称 / model name
-- `--max-steps N`：最大推理步数 / max steps
-- `--list-skills`：查看可用技能 / list skills
-- `--list-tools`：查看可用工具 / list tools
+Double click the following .bat files to init. If you wanted Vulkan, please install it first from [Vulkan SDK](https://vulkan.lunarg.com/doc/sdk/1.4.335.0/windows/getting_started.html).
 
-English notes:
+```bat
+REM 1 build llama.cpp (if not done yet)
+script\setup_llama_cpp.bat
 
+REM 2 download Qwen3-VL-2B model + mmproj
+script\download_qwen3vl.bat
+
+REM 3 run the server
+script\run_qwen3vl_server.bat
+```
+
+## Run Tests From Project Root
+These runners assume your local LLM server is running on the expected port.
+
+CLI Test Entry
+```bash
+python script/run_tests.py
+[Additional Flag] --port 1234 (if pointed to empty port, start qwen server) 
+[Additional Flag] --data data/paper_dev.jsonl
+```
+
+Baselines (vanilla prompt + tool calling):
+```bash
+# Fact Verification Baseline with prompt + tool calling at wiki search
+python src/baseline/fever_baseline.py --data data/paper_dev.jsonl --port 1025 --limit 5
+# Math Baseline with prompt + tool calling from math utils
+python src/baseline/gsm8k_baseline.py --limit 20 --max-tool-calls 3 --seed 42 --port 1025
+```
+
+React-based method:
+```bash
+python src/react-based-method/scripts/test_cn2.py
+python src/react-based-method/scripts/test_cn3.py
+python src/react-based-method/scripts/test_chinese.py
+python src/react-based-method/run_skill_fever_eval.py --data-dir data --n 20
+```
+
+FSM-based method: \
+Hard FSM:
+```bash
+python src/fsm-hard-fv/fever_runner.py --data data/paper_dev.jsonl --limit 100 --random --seed 234 --show-trace
+python -m uvicorn api:app --app-dir src/fsm-based-method --host 0.0.0.0 --port 8000
+``` 
+Soft FSM:
+```bash
+python src/fsm-soft-fv/fever_runner.py --data data/paper_dev.jsonl --limit 100 --random --seed 345
+# live stage-by-stage logs (enabled by default, disable with --no-live-steps)
+python src/fsm-soft-fv/fever_runner.py --data data/paper_dev.jsonl --limit 20 --live-steps
+# GSM8K math runner
+python src/fsm-soft-fv/gsm_runner.py --data data/ps/gsm8k/gsm8k.json --limit 100 --live-steps
+# optional: set SOFT_FSM_MATH_MAX_TOOL_CALLS in .env (default: 3)
+```
+
+DAG pipeline:
+```bash
+PYTHONPATH=src python -m dag --limit 20
+PYTHONPATH=src python -m dag --dataset data/paper_dev.jsonl --limit 20
+```
+
+Math Edu:
+```bash
+python src/math-edu/run_math_edu_skill.py --base-url http://127.0.0.1:1025 [OPTIONS]
+```
 - `--task` and `--task-file` are mutually practical alternatives; if both are provided, file content is typically used as the final task text in this project flow.
 - `--output-file` is strongly recommended for reproducibility because it preserves full step logs and final outputs.
 - `--max-steps` controls reasoning depth; increase it when tasks need longer decomposition.
 - `--list-skills` and `--list-tools` are useful sanity checks before your first run.
+- Remember to change the file directories. For detailed info check [Here for Doc](src/math-edu/README.md)
+
+
+# Tiny  Skills
+
+## Project Proposal
+
+**Version:** 2.0.1  
+**Date:** January 28, 2026  
+**Author:** Yifan Xu  
+**Last Update:** January 29, 2026  
+**Updated by:** Hanny Zhang 
 
 ---
 
-## 先检查可用项 | Check Available Skills/Tools
+## Executive Summary
+
+Tiny Agent Skills is an open-source framework that empowers users to create custom skills for small, locally-hosted language models (2B-7B parameters). The core innovation is a **user-friendly skill definition system** that automatically compiles human-readable skill documentation into optimized tool-calling schemas. Users simply write markdown documentation describing their domain expertise - the framework handles everything else: parsing patterns, compressing knowledge for small context windows, generating type-safe schemas, and validating model outputs.
+
+This democratizes Claude's sophisticated skill system for the local AI community, enabling anyone to build domain-specific AI assistants without cloud dependencies.
+
+---
+
+## Problem Statement
+
+### The Core Challenge
+
+Claude's skills work because they contain rich, human-readable documentation that Claude can parse and convert into reliable actions. Small models (2B-7B) struggle with this due to:
+
+1. **Limited context windows**: Cannot fit full skill documentation (16KB+)
+2. **Weak reasoning**: Struggle to extract patterns from prose + code examples
+3. **Poor function calling**: 2B-7B models have <60% accuracy on complex tool schemas
+4. **No error recovery**: Cannot self-correct malformed tool calls
+
+### The User Perspective Gap
+
+Users want to teach small models domain-specific skills but face major barriers:
+
+| What Users Want | Current Reality |
+|----------------|-----------------|
+| "Write a markdown file describing my skill" | Must manually create complex JSON schemas |
+| "The model should understand my documentation" | Models ignore or misinterpret prose instructions |
+| "It should just work with my 7B model" | Requires extensive prompt engineering for each model |
+| "I want to share skills with my team" | No standardized format; everyone reinvents the wheel |
+
+### What We're Building
+
+A **skill authoring and compilation system** where users:
+1. **Define** skills in natural markdown (no coding required for basic skills)
+2. **Compile** automatically into model-optimized artifacts
+3. **Share** skills with the community in standardized format
+4. **Customize** with full control over validation and behavior
+
+---
+
+## Project Objectives
+
+### Primary Goals
+
+1. **User-Friendly Skill Definition**: Anyone can create skills by writing markdown documentation
+2. **Automatic Optimization**: Framework compiles skills for different model tiers (2B/3B/7B)
+3. **Reliable Execution**: Achieve 80%+ valid function calls from 7B models, 60%+ from 2B
+4. **Community Extensibility**: Standardized format for sharing and customizing skills
+
+### Success Metrics
+
+**User Experience:**
+- Non-programmers can create basic skills within 30 minutes
+- Skills can be created, tested, and shared without writing any Python code
+- Clear validation feedback when skills have errors
+- Active community skill library with 20+ contributed skills
+
+**Technical Performance:**
+- Parse 100% of valid skill markdown successfully
+- Generate correct Pydantic schemas from documentation
+- 7B models: 80%+ syntactically correct tool calls
+- 2B models: 60%+ syntactically correct tool calls
+- Compilation time <10 seconds per skill
+
+---
+
+## Technical Architecture
+
+### System Overview
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                  USER: SKILL AUTHOR                      │
+│           (Writes SKILL.md in plain markdown)            │
+│  - Describes tools and capabilities in natural language  │
+│  - Provides code examples showing correct patterns       │
+│  - Lists critical constraints and warnings               │
+│  - No Python/JSON coding required                        │
+└────────────────────┬────────────────────────────────────┘
+                     │
+                     │ One-click compile
+                     ▼
+┌─────────────────────────────────────────────────────────┐
+│         SKILL COMPILATION PIPELINE (Automated)           │
+│                                                          │
+│  1. Markdown Parser                                      │
+│     └─> Extract: tool descriptions, examples, rules     │
+│                                                          │
+│  2. Pattern Analyzer                                     │
+│     └─> Infer: function signatures, types, constraints  │
+│                                                          │
+│  3. Tier Generator                                       │
+│     └─> Create: optimized prompts for 2B/3B/7B models  │
+│                                                          │
+│  4. Schema Generator                                     │
+│     └─> Output: Type-safe Pydantic models + validators  │
+│                                                          │
+└────────────────────┬────────────────────────────────────┘
+                     │
+                     │ Generates artifacts
+                     ▼
+┌─────────────────────────────────────────────────────────┐
+│          COMPILED SKILL BUNDLE (Shareable)               │
+│  skills/                                                 │
+│    my_skill/                                            │
+│      ├─ SKILL.md              (original documentation)  │
+│      ├─ skill.yaml            (metadata & config)       │
+│      ├─ prompts/                                        │
+│      │   ├─ prompt_a.txt                                │
+│      │   ├─ prompt_b.txt                                │
+│      │   └─ prompt_c.txt                                │
+│      ├─ schemas/                                        │
+│      │   └─ tool_schema.py    (Pydantic models)        │
+│      └─ validators/                                     │
+│          └─ validators.py     (auto-generated checks)   │
+└────────────────────┬────────────────────────────────────┘
+                     │
+                     │ Can be: shared, versioned, forked
+                     ▼
+┌─────────────────────────────────────────────────────────┐
+│         USER TOOL CALLING RUNTIME                        │
+│                                                          │
+│  User Request → Intent Router → Skill Selector          │
+│       │                                                  │                 │
+│       ├─> Load  skill rounting prompt                    │
+│       ├─> Inject schema for structured output           │
+│       └─> Generate with user's local LLM                │
+│                                                          │
+└────────────────────┬────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────────┐
+│    VALIDATION & FEEDBACK (Helps Users Improve Skills)   │
+│  - Parse against generated Pydantic schema               │
+│  - Check against extracted constraints                   │
+│  - Provide clear error messages                          │
+│  - Suggest fixes for common issues                       │
+│  - Log patterns for skill improvement                    │
+└──────────────────────────────────────────────────────────┘
+```
+
+### Core Innovation: User-Centric Skill Compilation
+
+The heart of the system transforms user-written documentation into machine-executable schemas.
+
+#### 1. Skill Definition Language
+
+Users write skills in **natural markdown** with special conventions:
+
+**Example: Custom Email Skill**
+
+```markdown
+# Email Management Skill
+
+## Description
+Helps users compose, categorize, and manage emails efficiently.
+
+## Tools
+
+### compose_email
+Creates a well-structured email draft.
+
+**Required:**
+- `to`: email address
+- `subject`: brief topic
+- `body`: main message
+
+**Optional:**
+- `cc`: additional recipients
+- `tone`: formal|casual|friendly
+
+**Rules:**
+- NEVER send emails automatically without user confirmation
+- Always validate email format
+- Keep subject lines under 60 characters
+
+**Examples:**
+
+✅ CORRECT:
+```json
+{
+  "to": "colleague@company.com",
+  "subject": "Q4 Report Review",
+  "body": "Hi Sarah, I've reviewed the Q4 report...",
+  "tone": "professional"
+}
+```
+
+❌ WRONG:
+```json
+{
+  "to": "invalid-email",  // Missing @ symbol
+  "subject": "This is an extremely long subject line that goes on and on...",  // Too long
+}
+```
+
+### categorize_email
+Suggests appropriate folder/label for an email.
+
+**Rules:**
+- Output one of: [work, personal, urgent, newsletter, archive]
+- Base decision on sender, subject, and urgency markers
+```
+
+#### 2. Automatic Schema Generation
+
+Framework automatically generates type-safe schemas:
+
+```python
+# Auto-generated from markdown above
+from pydantic import BaseModel, Field, validator
+from typing import Literal
+
+class ComposeEmail(BaseModel):
+    """Creates a well-structured email draft."""
+    
+    to: str = Field(..., description="Email address")
+    subject: str = Field(..., description="Brief topic")
+    body: str = Field(..., description="Main message")
+    cc: Optional[str] = Field(None, description="Additional recipients")
+    tone: Optional[Literal["formal", "casual", "friendly"]] = None
+    
+    @validator('to')
+    def validate_email(cls, v):
+        """Always validate email format"""
+        if '@' not in v:
+            raise ValueError("Invalid email format")
+        return v
+    
+    @validator('subject')
+    def check_subject_length(cls, v):
+        """Keep subject lines under 60 characters"""
+        if len(v) > 60:
+            raise ValueError("Subject too long (max 60 chars)")
+        return v
+
+class CategorizeEmail(BaseModel):
+    """Suggests appropriate folder/label for an email."""
+    
+    category: Literal["work", "personal", "urgent", "newsletter", "archive"]
+```
+
+
+## User Workflow
+
+### Creating a New Skill
 
 ```bash
-python run_math_edu_skill.py --list-skills
-python run_math_edu_skill.py --list-tools
+# 1. Create skill directory
+mkdir -p skills/my_skill
+
+# 2. Write skill documentation
+cat > skills/my_skill/SKILL.md << 'EOF'
+# My Custom Skill
+[User writes natural markdown documentation]
+EOF
+
+# 3. Compile skill (one command)
+tiny-claude compile skills/my_skill
+
+# Output:
+# ✓ Parsed documentation
+# ✓ Generated 3 tier prompts (2B: 847 tokens, 3B: 1.5K tokens, 7B: 2.8K tokens)
+# ✓ Created Pydantic schemas (2 tools detected)
+# ✓ Added validation rules (5 constraints)
+# ✓ Skill ready: skills/my_skill/
+
+# 4. Test with your model
+tiny-claude test skills/my_skill --model qwen-7b --query "Compose email to team"
+
 ```
 
 ---
 
-## 三类功能运行示例 | How to Run the Three Features
+## Implementation Plan
 
-### 1) 题目解答（`math_qa`）| Question Answering
+### Phase 1: Core Skill Compiler
 
-```bash
-python run_math_edu_skill.py \
-	--skill math_qa \
-	--task-file ./inputs/qa_task.txt \
-	--output-file ./outputs/qa_result.txt
-```
+**Goal:** Users can define and compile basic skills
 
-### 2) 学习检测（`math_diagnosis`）| Learning Diagnosis
+**Deliverables:**
+- Markdown parser: Extract tools, rules, examples
+- Schema generator: Pydantic models from documentation
+- CLI tool: `tiny-claude compile [skill_path]`
 
-```bash
-python run_math_edu_skill.py \
-	--skill math_diagnosis \
-	--task-file ./inputs/diagnosis_task.txt \
-	--output-file ./outputs/diagnosis_result.txt
-```
+**Success Criteria:**
+- Compile 5 example skills (email, calendar, note-taking, search, summary)
+- Generate valid schemas for all tools
+- Create tier-appropriate prompts
 
-### 3) 补习辅导（`math_tutoring`）| Tutoring
+### Phase 2: Validation & Testing Framework
 
-```bash
-python run_math_edu_skill.py \
-	--skill math_tutoring \
-	--task-file ./inputs/tutoring_task.txt \
-	--output-file ./outputs/tutoring_result.txt
-```
+**Goal:** Users get clear feedback on skill quality
 
-> 若不使用 `--task-file`，也可用 `--task "..."` 直接输入。
->
-> You can use `--task "..."` directly if you do not want `--task-file`.
+**Deliverables:**
+- Skill validator: Check completeness, suggest improvements
+- Test harness: Run skills against local models
+- Metrics dashboard: Track success rates per tool/tier
+- Error analyzer: Common failure patterns
 
-### English step-by-step walkthrough
+### Phase 3: Community Infrastructure
 
-1. Create or edit one input file in `inputs/`.
-2. Choose one skill based on your objective:
-	- `math_qa`: solve a math problem with reasoning
-	- `math_diagnosis`: evaluate student performance and identify knowledge gaps
-	- `math_tutoring`: provide guided teaching with progressive practice
-3. Run the corresponding command with `--output-file`.
-4. Open the output file in `outputs/` and review:
-	- intermediate `steps`
-	- `final_answer` for QA/tutoring tasks
-	- `diagnosis` for assessment tasks
-5. Iterate by refining input prompts (difficulty, grade level, expected format).
+**Goal:** Users can share and discover skills
 
-Windows PowerShell one-line commands:
+**Deliverables:**
+- Skill registry: Searchable community catalog
+- Version management: Git-based skill evolution
+- Dependency system: Skills can build on other skills
+- Documentation site: Tutorials, best practices, examples
 
-```powershell
-python .\run_math_edu_skill.py --skill math_qa --task-file .\inputs\qa_task.txt --output-file .\outputs\qa_result.txt
-python .\run_math_edu_skill.py --skill math_diagnosis --task-file .\inputs\diagnosis_task.txt --output-file .\outputs\diagnosis_result.txt
-python .\run_math_edu_skill.py --skill math_tutoring --task-file .\inputs\tutoring_task.txt --output-file .\outputs\tutoring_result.txt
-```
+
+### Phase 4: Advanced Features (Weeks 13-16)
+
+**Goal:** Power users can customize deeply
+
+**Deliverables:**
+- Custom validators: User-written validation logic
+- Multi-skill workflows: Chain skills together
+- Skill analytics: Usage patterns, optimization suggestions
+- Integration helpers: Easy deployment in apps
 
 ---
 
-## 输入模板建议 | Suggested Input Templates
+## Technology Stack
 
-### `inputs/qa_task.txt`
+### User-Facing Tools
+- **CLI**: Typer (Python) - intuitive commands
+- **Configuration**: YAML - human-readable skill metadata
+- **Documentation**: Markdown - universal, accessible format
 
-```text
-题目：解方程 2x + 3 = 11，并说明每一步依据。
-```
+### Core Framework
+- **Parser**: Python AST + regex for code extraction
+- **Schema Generation**: Pydantic V2 - type-safe, validated models
+- **Validation**: Custom rule engine built on Pydantic
+- **Testing**: Pytest + hypothesis for property testing
 
-English sample:
+### Model Integration
+- **Inference**: llama.cpp + Instructor for structured outputs
+- **Supported Models**: Any GGUF model with function calling
+- **Optimization**: Per-tier prompt templates
 
-```text
-Problem: Solve 2x + 3 = 11 and explain each transformation step.
-Output format: show steps first, then final answer on a separate line.
-```
-
-### `inputs/diagnosis_task.txt`
-
-```text
-题目：解方程 2x + 3 = 11
-学生答案：x = 5
-学生步骤：2x = 11 - 3 = 8，所以 x = 5
-请判断是否正确，定位错误知识点，并给出补救练习建议。
-```
-
-English sample:
-
-```text
-Question: Solve 2x + 3 = 11
-Student answer: x = 5
-Student steps: 2x = 11 - 3 = 8, therefore x = 5
-Please evaluate correctness, identify misconception type, and suggest remedial exercises.
-```
-
-### `inputs/tutoring_task.txt`
-
-```text
-我不会一元一次方程，请从基础概念开始讲解，并给两道由易到难练习题。
-```
-
-English sample:
-
-```text
-I struggle with linear equations in one variable.
-Please teach from fundamentals and provide two graded practice questions.
-```
+### Community Platform
+- **Registry**: GitHub repos + JSON catalog
+- **Versioning**: Git + semantic versioning
+- **Discovery**: Search API + web interface
 
 ---
 
-## VS Code 一键运行 | One-click Run in VS Code
+## Differentiation from Existing Tools
 
-### 中文
+| Feature | Tiny Agent Skills | LangChain Tools | Semantic Kernel | OpenAI Functions |
+|---------|-------------------|-----------------|-----------------|------------------|
+| **Markdown-based authoring** | ✅ Yes | ❌ Code only | ❌ Code only | ❌ JSON only |
+| **Automatic schema generation** | ✅ Yes | ❌ Manual | ❌ Manual | ❌ Manual |
+| **Multi-tier optimization** | ✅ 2B/3B/7B | ❌ One size | ❌ One size | ❌ Cloud only |
+| **Validation layer** | ✅ Built-in | ⚠️ Basic | ⚠️ Basic | ⚠️ Basic |
+| **Community sharing** | ✅ Registry | ⚠️ Scattered | ⚠️ Limited | ❌ No |
+| **Non-programmer friendly** | ✅ Yes | ❌ Requires coding | ❌ Requires coding | ❌ Requires coding |
+| **Local model support** | ✅ Primary focus | ⚠️ Secondary | ⚠️ Secondary | ❌ Cloud only |
 
-1. 打开左侧「运行和调试」。
-2. 选择 `Math QA` / `Math Diagnosis` / `Math Tutoring`。
-3. 点击绿色运行按钮。
-4. 查看 `outputs/*.txt`。
-
-### English
-
-1. Open **Run and Debug** in VS Code.
-2. Choose `Math QA`, `Math Diagnosis`, or `Math Tutoring`.
-3. Click the green run button.
-4. Wait for terminal completion and check output files under `outputs/`.
-5. If a run fails, inspect the integrated terminal first, then validate input file paths.
+**Key Advantage:** We're the only framework designed for **non-programmers to author skills** that work reliably with **small local models**.
 
 ---
 
-## 输出说明 | Output Notes
+## Risk Mitigation
 
-运行结果通常包含：
+| Risk | Mitigation |
+|------|------------|
+| **Users write invalid markdown** | Validator catches errors with helpful messages |
+| **Models ignore skill instructions** | Multiple tiers + extensive testing ensure reliability |
+| **Skills don't generalize** | Community feedback loop + analytics identify issues |
+| **Adoption is slow** | Focus on 5 killer skills first, then expand |
+| **Schema generation fails** | Fallback to manual schema editing |
 
-- `steps`：中间推理步骤 / intermediate steps
-- `final_answer`：最终答案（常见于 `math_qa`）/ final answer
-- `diagnosis`：诊断报告（常见于 `math_diagnosis`）/ diagnosis report
+---
+
+
+## Why This Matters
+
+This project democratizes sophisticated AI capabilities by enabling:
+
+1. **Domain Experts**: Encode specialized knowledge without coding
+2. **Privacy**: Keep sensitive data local, no cloud dependencies
+3. **Customization**: Tailor AI behavior to specific needs
+4. **Community**: Share and build on each other's skills
+5. **Accessibility**: Run powerful AI on consumer hardware
+
+Most importantly, it proves that **small local models can be as capable as cloud giants** when given the right structure and guidance.
 
 ---
 
-## 常见问题 | FAQ
+## Call to Action
 
-### 1) `--skill is required` 报错
+**For Contributors:**
+- Help build the skill compiler and validation framework
+- Create example skills in your domain of expertise
+- Test with different local models and report findings
 
-- 原因：未提供 `--skill`。
-- 解决：使用 `--skill math_qa`（或另外两种）。
+**For Early Adopters:**
+- Define a skill for your use case
+- Provide feedback on authoring experience
+- Share your skill with the community
 
-### 2) `task is empty` 报错
-
-- 原因：`--task` 为空，或 `--task-file` 文件内容为空。
-- 解决：检查输入文件内容。
-
-### 3) 找不到技能目录 / `SKILL.md`
-
-- 原因：目录结构不完整。
-- 解决：确认 `skills/<skill_name>/SKILL.md` 存在。
-
-### 4) 运行失败（Exit Code 1）
-
-- 先检查模型服务地址与模型名（`--base-url`、`--model`）。
-- 再检查 `inputs/` 文件是否存在且非空。
-
-### English FAQ
-
-#### 1) Error: `--skill is required`
-
-- Cause: You launched without selecting a skill.
-- Fix: Add `--skill math_qa` (or `math_diagnosis` / `math_tutoring`).
-
-#### 2) Error: `task is empty`
-
-- Cause: Empty `--task`, or `--task-file` points to an empty file.
-- Fix: Fill the input text file with actual task content.
-
-#### 3) Error: skill directory or `SKILL.md` not found
-
-- Cause: Missing or broken folder structure under `skills/`.
-- Fix: Ensure `skills/<skill_name>/SKILL.md` exists.
-
-#### 4) Exit Code 1 after command execution
-
-- Check model endpoint (`--base-url`) and model identifier (`--model`).
-- Check that input files exist and are readable.
-- Re-run with `--list-skills` and `--list-tools` to confirm environment consistency.
-
-#### 5) Output does not include expected diagnosis/answer
-
-- Some tasks may require clearer prompt constraints.
-- Add explicit instructions in input text, such as:
-	- "Return diagnosis with misconception category and confidence"
-	- "Return final answer in one dedicated line"
+**For the Ecosystem:**
+- This creates a standard for local AI skill definition
+- Opens up research opportunities in efficient tool use
+- Builds infrastructure for the post-API AI era
 
 ---
+
+## Appendices
+
+### Appendix A: Skill Definition Template
+
+```markdown
+# [Skill Name]
+
+## Description
+[1-2 sentence overview of what this skill does]
+
+## Tools
+
+### [tool_name]
+[Brief description of tool purpose]
+
+**Required:**
+- `param1`: description
+- `param2`: description
+
+**Optional:**
+- `param3`: description
+
+**Rules:**
+- CRITICAL constraint 1
+- CRITICAL constraint 2
+
+**Examples:**
+
+✅ CORRECT:
+```json
+{
+  "param1": "value",
+  "param2": "value"
+}
+```
+
+❌ WRONG:
+```json
+{
+  "param1": "bad_value"  // Why this is wrong
+}
+```
+
+[Repeat for each tool]
+```
+
+### Appendix B: Compilation Pipeline Details
+
+```
+SKILL.md
+  ↓
+[Parse Markdown]
+  ├─> Extract tools (names, descriptions)
+  ├─> Extract parameters (types, requirements)
+  ├─> Extract rules (constraints, warnings)
+  ├─> Extract examples (correct + incorrect)
+  ↓
+[Analyze Patterns]
+  ├─> Infer types from examples
+  ├─> Detect validation rules from constraints
+  ├─> Score complexity for tier assignment
+  ↓
+[Generate Artifacts]
+  ├─> Pydantic schemas (tool_schema.py)
+  ├─> Validators (validators.py)
+  ├─> Tier 1 prompt (ultra-compressed, 2B)
+  ├─> Tier 2 prompt (compressed, 3B)
+  ├─> Tier 3 prompt (full capability, 7B)
+  ├─> Skill metadata (skill.yaml)
+  ↓
+[Package]
+  └─> Complete skill bundle ready for:
+      - Local testing
+      - Community sharing
+      - Version control
+```
+
+
+**End of Proposal**
