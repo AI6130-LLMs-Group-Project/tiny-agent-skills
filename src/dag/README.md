@@ -9,7 +9,7 @@ dag/
 ├── __main__.py       # Entry: python -m dag [--dataset path] [--limit N]
 ├── pipeline.py       # PipelineConfig, StepDef, PipelineRunner (DAG orchestration)
 ├── llm_client.py     # Local LLM client (OpenAI-compatible /v1/chat/completions)
-├── data/
+├── ../../data/       # Project root (paper_dev.jsonl, etc.)
 │   ├── paper_dev.py  # paper_dev.jsonl loader
 │   └── paper_dev.jsonl
 ├── skills/
@@ -18,7 +18,7 @@ dag/
 ```
 
 - **Orchestration**: `config/pipelines/fact_check.yaml` defines the DAG (step order and optional `goto_if`).
-- **Data**: This framework’s data lives under `src/dag/data/`, independent of FSM and ReAct.
+- **Data**: Default dataset is project root `data/paper_dev.jsonl`; data loaders live under `src/dag/data/`.
 
 ## Before running
 

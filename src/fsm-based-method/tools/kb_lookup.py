@@ -2,6 +2,7 @@
 
 import json
 import os
+from pathlib import Path
 
 
 def _err(code, msg):
@@ -26,10 +27,10 @@ def _load_kb(path):
 def _load_runtime_env():
     if getattr(_load_runtime_env, "_loaded", False):
         return
-    root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    env_path = os.path.join(root, ".env")
-    if os.path.isfile(env_path):
-        with open(env_path, "r", encoding="utf-8") as f:
+    root = Path(__file__).resolve().parents[3]
+    env_path = root / ".env"
+    if env_path.is_file():
+        with env_path.open("r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith("#") or "=" not in line:

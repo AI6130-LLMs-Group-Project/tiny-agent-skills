@@ -7,7 +7,8 @@ from run_skill import run_skill
 
 os.environ["SKILL_STEP_LOG"] = "1"
 
-base_url = "http://127.0.0.1:1025"
+port = os.environ.get("LLM_PORT", "1025")
+base_url = f"http://127.0.0.1:{port}"
 
 # 测试用例列表
 test_cases = [

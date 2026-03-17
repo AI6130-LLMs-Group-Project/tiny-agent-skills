@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -10,10 +11,10 @@ from typing import Any, Dict, List, Optional
 def load_env():
     if getattr(load_env, "_loaded", False):
         return
-    root = os.path.abspath(os.path.dirname(__file__))
-    env_path = os.path.join(root, ".env")
-    if os.path.isfile(env_path):
-        with open(env_path, "r", encoding="utf-8") as f:
+    root = Path(__file__).resolve().parents[2]
+    env_path = root / ".env"
+    if env_path.is_file():
+        with env_path.open("r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith("#") or "=" not in line:

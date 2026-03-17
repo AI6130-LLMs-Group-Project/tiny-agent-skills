@@ -52,10 +52,11 @@ def main():
     parser.add_argument("--seed", type=int, default=233)
     parser.add_argument("--max-steps", type=int, default=7)
     parser.add_argument("--skill-dir", default=SKILL_DIR)
+    parser.add_argument("--data-dir", default=None)
     args = parser.parse_args()
 
     env = wikienv.WikiEnv()
-    env = wrappers.FeverWrapper(env, split=args.split)
+    env = wrappers.FeverWrapper(env, split=args.split, data_dir=args.data_dir)
     env = wrappers.LoggingWrapper(env)
 
     idxs = list(range(7405))
