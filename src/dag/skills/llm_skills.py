@@ -4,6 +4,7 @@ Fact-checking DAG skills: query_gen, evidence_extract, verify call local LLM; re
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from dag.llm_client import chat
@@ -180,4 +181,97 @@ def fact_check_skill_registry() -> dict[str, Skill]:
         "evidence_extract": _EvidenceExtractSkill(),
         "verify": _VerifySkill(),
         "output": _OutputSkill(),
+    }
+
+
+# -----------------------------------------------------------------------------
+# Math (GSM8K) pipeline: reason -> extract_answer -> output
+# -----------------------------------------------------------------------------
+
+MATH_REASON_SYSTEM = """You are a math problem solver. Given a word problem, solve it step by step. Show each step clearly. At the end, state the final numeric answer on a line that starts with "Answer:" or "The answer is" so it can be extracted."""
+
+MATH_EXTRACT_SYSTEM = """Given a math question and the reasoning that leads to an answer, output ONLY the final numeric answer (a single number, possibly with decimal). No explanation. If the reasoning has a line like "Answer: 42" or "The answer is 42", output 42. If you cannot find a number, output 0."""
+
+
+class _MathReasonSkill:
+    """
+    Input:  context with "question" (str).
+    Output: {"reasoning": str, "last_step": "reason"}.
+    """
+
+    def run(self, context: dict[str, Any]) -> dict[str, Any]:
+        question = context.get("question", "")
+        base_url = _get_base_url()
+        text = chat(
+            [
+                {"role": "system", "content": MATH_REASON_SYSTEM},
+                {"role": "user", "content": question},
+            ],
+            base_url=base_url,
+            max_tokens=512,
+        )
+        return {"reasoning": text.strip(), "last_step": "reason"}
+
+
+def _parse_numeric(s: str) -> float | None:
+    """Try to extract a single number from string (e.g. '42', '18.5', '$64')."""
+    s = (s or "").strip()
+    # Remove common prefixes/suffixes
+    s = re.sub(r"^[^\d\-.]*", "", s)
+    s = re.sub(r"[^\d.\-eE]$", "", s)
+    # Last number in string (often the final answer)
+    matches = re.findall(r"-?\d+\.?\d*(?:[eE][-+]?\d+)?", s)
+    if not matches:
+        return None
+    try:
+        return float(matches[-1])
+    except ValueError:
+        return None
+
+
+class _MathExtractAnswerSkill:
+    """
+    Input:  context with "question", "reasoning".
+    Output: {"answer": float, "answer_raw": str, "last_step": "extract_answer"}.
+    """
+
+    def run(self, context: dict[str, Any]) -> dict[str, Any]:
+        question = context.get("question", "")
+        reasoning = context.get("reasoning", "")
+        base_url = _get_base_url()
+        text = chat(
+            [
+                {"role": "system", "content": MATH_EXTRACT_SYSTEM},
+                {"role": "user", "content": f"Question: {question}\n\nReasoning:\n{reasoning}\n\nFinal numeric answer only:"},
+            ],
+            base_url=base_url,
+            max_tokens=32,
+        )
+        raw = text.strip()
+        num = _parse_numeric(raw)
+        if num is None and reasoning:
+            num = _parse_numeric(reasoning) or 0.0
+        return {"answer": num if num is not None else 0.0, "answer_raw": raw, "last_step": "extract_answer"}
+
+
+class _MathOutputSkill:
+    """
+    Input:  context with "question", "answer" (or "answer_raw").
+    Output: {"output": "Question: ...\nAnswer: ...", "last_step": "output"}.
+    """
+
+    def run(self, context: dict[str, Any]) -> dict[str, Any]:
+        question = context.get("question", "")
+        answer = context.get("answer", context.get("answer_raw", ""))
+        return {"output": f"Question: {question}\nAnswer: {answer}", "last_step": "output"}
+
+
+def math_skill_registry() -> dict[str, Skill]:
+    """
+    Registry for math (GSM8K) pipeline: reason -> extract_answer -> output.
+    """
+    return {
+        "reason": _MathReasonSkill(),
+        "extract_answer": _MathExtractAnswerSkill(),
+        "output": _MathOutputSkill(),
     }

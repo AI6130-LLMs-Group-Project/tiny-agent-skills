@@ -4,21 +4,20 @@ Fact-checking pipeline driven by a **directed acyclic graph**: step order is def
 
 ## Layout
 
+Same structure as `fsm-based-method` and `react-based-method`: no `data/` inside the module; datasets live under project root `data/`.
+
 ```
 dag/
-├── __main__.py       # Entry: python -m dag [--dataset path] [--limit N]
+├── __main__.py       # Entry + inline loaders for data/paper_dev.jsonl, data/ps/gsm8k/gsm8k.json
 ├── pipeline.py       # PipelineConfig, StepDef, PipelineRunner (DAG orchestration)
 ├── llm_client.py     # Local LLM client (OpenAI-compatible /v1/chat/completions)
-├── ../../data/       # Project root (paper_dev.jsonl, etc.)
-│   ├── paper_dev.py  # paper_dev.jsonl loader
-│   └── paper_dev.jsonl
 ├── skills/
-│   └── llm_skills.py # query_gen, retrieve, evidence_extract, verify, output
+│   └── llm_skills.py # query_gen, retrieve, evidence_extract, verify, output (+ math skills)
 └── README.md
 ```
 
-- **Orchestration**: `config/pipelines/fact_check.yaml` defines the DAG (step order and optional `goto_if`).
-- **Data**: Default dataset is project root `data/paper_dev.jsonl`; data loaders live under `src/dag/data/`.
+- **Orchestration**: `config/pipelines/fact_check.yaml` and `math_gsm8k.yaml` define the DAG (step order and optional `goto_if`).
+- **Data**: Project root `data/` (e.g. `data/paper_dev.jsonl`, `data/ps/gsm8k/gsm8k.json`); loaders are inline in `__main__.py`.
 
 ## Before running
 
@@ -36,7 +35,7 @@ dag/
 # Single example
 PYTHONPATH=src python3 -m dag
 
-# Eval on paper_dev (uses dag/data/paper_dev.jsonl)
+# Eval on paper_dev (uses data/paper_dev.jsonl)
 PYTHONPATH=src python3 -m dag --limit 100
 
 # Custom dataset
